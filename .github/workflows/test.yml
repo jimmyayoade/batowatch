@@ -1,0 +1,21 @@
+name: test
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"     # Batocera's Python
+      - name: Lint
+        run: |
+          pip install pyflakes
+          pyflakes *.py tv/*.py tests/*.py art/*.py
+          shellcheck -s bash batowatch-service.sh
+      - name: Tests
+        run: |
+          python3 tests/test_fake_trees.py
+          python3 tests/test_settings_auth.py

@@ -1,0 +1,1107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BatoWatch</title>
+<link rel="icon" href="www/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="www/favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="apple-touch-icon" href="www/icon-192.png">
+<style>
+  /* Always dark. Blue and mint are the interface; red only ever means a
+     problem, and every status also has a word, never colour alone. */
+  :root {
+    color-scheme: dark;
+    /* BatoWatch's own look, shared with the TV app: the logo's slate-teal,
+       borderless soft cards, mint for focus, gauges like the logo's */
+    --paper: #0c1418;
+    --paper-top: #1a2830;
+    --panel: #16232a;
+    --panel-2: #1b2c34;
+    --sel: #1e3a3a;
+    --ink: #e6ebf3;
+    --muted: #8fa3ad;
+    --rule: #263840;
+    --amber: #e2b868;
+    --blue: #6fd0ff;
+    --blue-deep: #1e9bff;
+    --mint: #7fe3c3;
+    --mint-ink: #062018;
+    --band: #18363c;
+    --band-edge: #1d4448;
+    --band-ink: #f2f5fa;
+    --band-muted: #9fb2d6;
+    --bad: #f0606a;
+    --bad-bg: #3a1218;
+    --warn: #f2c94c;
+
+    --r-direct: #3fb68b;
+    --r-relay: #f08a4b;
+    --r-router: #a78bfa;
+    --r-lan: #60a5fa;
+    --r-gateway: #94a3b8;
+    --r-container: #7c8798;
+    --r-internet: #4b5566;
+
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, sans-serif;
+    --display: "Rajdhani", "Barlow Semi Condensed", "Arial Narrow", var(--sans);
+    /* readouts: a condensed face where the device has one (Batocera and Linux:
+       DejaVu Sans Condensed), else the normal font */
+    --num: "DejaVu Sans Condensed", "Roboto Condensed", "Arial Narrow", "Helvetica Neue", var(--sans);
+  }
+  * { box-sizing: border-box; }
+  html { background: linear-gradient(180deg, var(--paper-top) 0, var(--paper) 520px) var(--paper) no-repeat;
+         color: var(--ink); min-height: 100%; }
+  body { margin: 0; font: 15px/1.45 var(--sans); font-variant-numeric: tabular-nums; }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 18px 20px 48px; }
+  [hidden] { display: none !important; }
+
+  header { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+           flex-wrap: wrap; margin-bottom: 14px; }
+  header .pulse { flex: 1; min-width: 80px; height: 24px; color: #284a48; }
+  @media (max-width: 760px) { header .pulse { display: none; } }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand img { width: 44px; height: 44px; }
+  h1 { font: 700 30px/1 var(--display); margin: 0; letter-spacing: .01em; }
+  h1 .b { color: #ff7a6e; } h1 .w { color: var(--blue); }
+  h1 span.host { display: block; font: 400 14px var(--sans); color: var(--muted); margin-top: 3px; }
+  .conn { color: var(--muted); font-size: 14px; display: flex; align-items: center; gap: 8px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--r-direct); }
+  .dot.down { background: var(--bad); }
+
+  /* Status strip: is everything OK, on every tab */
+  .strip { display: flex; flex-wrap: wrap; gap: 8px 22px; align-items: center; padding: 10px 14px;
+           background: var(--panel); border: 1px solid var(--rule); border-left: 4px solid var(--mint);
+           border-radius: 6px; margin-bottom: 14px; }
+  .strip.bad { border-left-color: var(--bad); background: linear-gradient(90deg, var(--bad-bg), var(--panel) 60%); }
+  .strip .health { font-weight: 700; }
+  .strip .item { color: var(--muted); }
+  .strip .item b { color: var(--ink); font-weight: 600; }
+  .strip button.alert { all: unset; cursor: pointer; color: #ffd6d9; background: var(--bad-bg);
+                        border: 1px solid var(--bad); border-radius: 4px; padding: 3px 9px; font-size: 14px; }
+  .strip button.alert::before { content: "⚠ "; }
+  .strip button.alert:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; }
+
+  nav.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--rule); margin-bottom: 18px; }
+  nav.tabs button { all: unset; cursor: pointer; padding: 10px 16px; min-height: 24px; color: var(--muted);
+                    font-weight: 600; border-bottom: 3px solid transparent; margin-bottom: -1px; }
+  nav.tabs button[aria-selected=true] { color: var(--ink); border-bottom-color: var(--blue); }
+  nav.tabs button:focus-visible { outline: 2px solid var(--mint); outline-offset: -2px; }
+
+  h2 { font: 700 21px/1.2 var(--display); margin: 0 0 10px; letter-spacing: .01em; }
+  h3 { font: 600 15px/1.3 var(--sans); margin: 0 0 8px; color: var(--muted); }
+  .notice { background: color-mix(in srgb, var(--warn) 12%, var(--panel)); border-left: 4px solid var(--warn);
+            padding: 10px 14px; margin: 0 0 16px; }
+  :focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; }
+  .muted { color: var(--muted); }
+  .word { font-size: 12px; font-weight: 700; border-radius: 3px; padding: 1px 6px; text-transform: uppercase;
+          letter-spacing: .03em; white-space: nowrap; }
+  .word.ok { color: var(--mint-ink); background: var(--mint); }
+  .word.bad { color: #fff; background: var(--bad); }
+
+  /* Hardware summary tiles */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 22px; }
+  .tile { background: var(--panel); border: 1px solid transparent; position: relative;
+          border-radius: 14px; padding: 12px 14px; }
+  .tile.bad { border-color: var(--bad); }
+  /* a dial like the logo's gauge, with the reading inside */
+  .tile { display: flex; flex-direction: column; }
+  .tile .mid { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center;
+               padding: 6px 0 2px; }
+  .tile .s { text-align: center; }
+  /* the dial's centre is 50% across and (32/64)/(50/64) = 64% down its box */
+  .dial { position: relative; width: min(150px, 100%); aspect-ratio: 64 / 50; container-type: inline-size; }
+  .dial svg { position: absolute; left: 0; top: 0; width: 100%; height: auto; }
+  .dial .v { position: absolute; left: 0; right: 0; top: 64%; transform: translateY(-50%); margin: 0;
+             text-align: center; font-size: 22cqw; line-height: 1; white-space: nowrap; }
+  .v .u { font-size: .5em; font-weight: 600; color: var(--muted); margin-left: .12em; }
+  /* tiles without a gauge keep the same dial-shaped space, so every reading sits at the same height */
+  .row.stack { flex-direction: column; align-items: stretch; gap: 2px; }
+  .row.stack .r { justify-content: flex-end; }
+  .row .sub { color: var(--muted); font-size: 12px; }
+  .tile .k { color: var(--muted); font-size: 13px; display: flex; justify-content: space-between; gap: 6px; }
+  .tile .v { font: 700 32px/1.15 var(--num); margin-top: 4px; letter-spacing: -.01em; }
+  .tile .s { color: var(--muted); font-size: 12px; }
+
+  .arrange-bar { display: flex; justify-content: flex-end; margin: -4px 0 10px; }
+  dialog.customize { background: var(--panel); color: var(--ink); border: 1px solid var(--rule); border-radius: 10px;
+                     padding: 0; width: min(460px, calc(100vw - 32px)); max-height: calc(100vh - 40px); }
+  dialog.customize::backdrop { background: rgba(0, 0, 0, .6); }
+  .customize header { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px;
+                      border-bottom: 1px solid var(--rule); margin: 0; }
+  .customize .body { padding: 6px 18px 12px; overflow: auto; max-height: calc(100vh - 170px); }
+  .customize h3 { margin: 14px 0 6px; }
+  .customize .help { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+  .crow { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px dotted var(--rule); }
+  .crow label { flex: 1; display: flex; align-items: center; gap: 10px; cursor: pointer; min-height: 36px; }
+  .crow.off label { color: var(--muted); }
+  .crow button { all: unset; cursor: pointer; width: 36px; height: 36px; text-align: center; line-height: 36px;
+                 border: 1px solid var(--rule); border-radius: 6px; color: var(--ink); }
+  .crow button:disabled { opacity: .3; cursor: default; }
+  .crow button:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; }
+  .customize footer { display: flex; justify-content: space-between; padding: 12px 18px; border-top: 1px solid var(--rule); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; margin-bottom: 26px; }
+  .card { background: var(--panel); border: 1px solid transparent; border-radius: 14px; padding: 14px 16px; }
+  .card.flash { box-shadow: 0 0 0 2px var(--bad); }
+  .card h2 { font-size: 19px; display: flex; align-items: center; gap: 8px; }
+  .card h2 small { font: 400 13px var(--sans); color: var(--muted); margin-left: auto; }
+  .row { display: flex; justify-content: space-between; gap: 10px; padding: 4px 0; border-bottom: 1px dotted var(--rule); }
+  .row:last-child { border-bottom: 0; }
+  .row .l { color: var(--muted); overflow-wrap: anywhere; }
+  .row .r { white-space: nowrap; display: flex; gap: 8px; align-items: center; }
+  .meter { height: 6px; background: var(--panel-2); border-radius: 3px; overflow: hidden; margin: 3px 0 6px; }
+  .meter i { display: block; height: 100%; background: var(--blue-deep); }
+  .meter.bad i { background: var(--bad); }
+  .cores { display: grid; grid-template-columns: repeat(auto-fill, minmax(46px, 1fr)); gap: 6px; margin-top: 8px; }
+  .core { font-size: 11px; color: var(--muted); text-align: center; }
+  .core .bar { height: 34px; background: var(--panel-2); border-radius: 3px; position: relative; overflow: hidden; }
+  .core .bar i { position: absolute; left: 0; right: 0; bottom: 0; background: var(--blue-deep); }
+
+  /* Graphs */
+  .graph-tools { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+  .seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
+  .seg button { all: unset; cursor: pointer; padding: 8px 14px; color: var(--muted); font-weight: 600; }
+  .seg button[aria-pressed=true] { background: var(--blue-deep); color: #fff; }
+  .seg button:focus-visible { outline: 2px solid var(--mint); outline-offset: -2px; }
+  select, input[type=text], input[type=password], input[type=search], input[type=number] {
+    font: inherit; color: var(--ink); background: var(--panel-2); border: 1px solid var(--rule);
+    border-radius: 4px; padding: 7px 10px; min-height: 36px; }
+  .chart { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 10px 12px 6px;
+           margin-bottom: 12px; }
+  .chart .ct { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; }
+  .chart .ct b { font-weight: 600; }
+  .chart .ct span { color: var(--muted); }
+  .chart canvas { width: 100%; height: 170px; display: block; touch-action: pan-y; cursor: crosshair; }
+  .chart .legend { font-size: 12px; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap; }
+  .chart .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+
+  details.na { margin-top: 20px; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 10px 14px; }
+  details.na summary { cursor: pointer; color: var(--muted); font-weight: 600; min-height: 28px; }
+  details.na li { margin: 4px 0; }
+
+  /* Network tab (from NetWatch) */
+  .streams { background: linear-gradient(100deg, var(--band), var(--band-edge)); color: var(--band-ink);
+             border-radius: 6px; margin-bottom: 26px; border-left: 3px solid var(--mint); }
+  .stream { display: grid; grid-template-columns: 1fr auto auto; gap: 8px 32px; align-items: center; padding: 20px 24px; }
+  .stream + .stream { border-top: 1px solid rgba(255,255,255,.12); }
+  .stream-name { font: 700 32px/1.1 var(--display); overflow-wrap: anywhere; }
+  .stream-sub { color: var(--band-muted); font-size: 14px; margin-top: 4px; }
+  .stream-sub i { font-style: normal; display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+                  margin-right: 6px; vertical-align: -1px; }
+  .metric { text-align: right; }
+  .metric b { display: block; font: 700 26px/1.1 var(--display); color: var(--mint); }
+  .metric small { color: var(--band-muted); font-size: 13px; }
+  .stream svg { display: block; }
+  .streams.empty { background: transparent; color: var(--muted); border: 1px dashed var(--rule); border-left: 3px solid var(--rule); }
+  .streams.empty p { margin: 0; padding: 16px 24px; }
+  .bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+  .bar h2 { margin: 0; }
+  .tools { display: flex; gap: 14px; align-items: center; color: var(--muted); font-size: 14px; flex-wrap: wrap; }
+  input[type=search] { width: 220px; }
+  label.chk { display: flex; gap: 6px; align-items: center; cursor: pointer; min-height: 36px; }
+  input[type=checkbox] { accent-color: var(--blue-deep); width: 18px; height: 18px; }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); }
+  th { text-align: left; font-weight: 600; font-size: 13px; color: var(--muted); background: var(--panel-2);
+       padding: 8px 12px; border-bottom: 1px solid var(--rule); }
+  tr.dev:hover > td { background: var(--panel-2); }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--rule); vertical-align: middle; }
+  td.num, th.num { text-align: right; white-space: nowrap; }
+  tr.dev > td:first-child { border-left: 4px solid var(--route); }
+  tr.dev.idle { opacity: .6; }
+  .who button { all: unset; cursor: pointer; display: block; min-height: 32px; }
+  .who .nm { font: 600 17px/1.25 var(--sans); overflow-wrap: anywhere; }
+  .who .nm::before { content: "▸"; display: inline-block; width: 1em; color: var(--muted); transition: transform .15s; }
+  .who button[aria-expanded=true] .nm::before { transform: rotate(90deg); }
+  .who .meta { color: var(--muted); font-size: 13px; margin-left: 1em; }
+  .route { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+  .route i { width: 10px; height: 10px; border-radius: 2px; background: var(--route); }
+  .since { color: var(--muted); font-size: 13px; display: block; }
+  .rate { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+  .live { display: inline-block; font-size: 12px; font-weight: 700; color: var(--mint-ink); background: var(--mint);
+          border-radius: 3px; padding: 1px 6px; margin-left: 8px; vertical-align: 2px; }
+  tr.detail > td { padding: 0 12px 14px calc(12px + 1em + 4px); background: var(--panel); border-left: 4px solid var(--route); }
+  .flows { width: 100%; font-size: 13px; background: transparent; }
+  .flows th { font-size: 12px; padding: 6px 8px; background: transparent; }
+  .flows td { padding: 5px 8px; border-bottom: 1px dotted var(--rule); }
+  .dir { color: var(--muted); }
+  .lower { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; margin-top: 30px; }
+  .log { list-style: none; margin: 0; padding: 0; background: var(--panel); max-height: 360px; overflow: auto;
+         border: 1px solid var(--rule); }
+  .log li { display: grid; grid-template-columns: 4.6em 1fr; gap: 10px; padding: 7px 12px;
+            border-bottom: 1px solid var(--rule); font-size: 14px; }
+  .log li:last-child { border-bottom: 0; }
+  .log time { color: var(--muted); }
+  .log .k-start { color: var(--mint); font-weight: 600; }
+  .log .k-warn { color: var(--bad); }
+  .log .k-gone { color: var(--muted); }
+  .empty-row { color: var(--muted); padding: 14px 12px; }
+
+  /* Settings */
+  .settings fieldset { border: 1px solid var(--rule); border-radius: 6px; background: var(--panel);
+                       margin: 0 0 14px; padding: 6px 16px 10px; }
+  .settings legend { font: 700 18px var(--display); padding: 0 6px; }
+  .field { display: grid; grid-template-columns: minmax(150px, 220px) 1fr; gap: 6px 16px; padding: 10px 0;
+           border-bottom: 1px dotted var(--rule); align-items: start; }
+  .field:last-child { border-bottom: 0; }
+  .field label { font-weight: 600; font-family: ui-monospace, monospace; font-size: 13px; padding-top: 8px; }
+  .field .help { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .field .err { color: #ffb4b9; font-size: 13px; margin-top: 4px; }
+  .field .tag { font-size: 11px; color: var(--warn); margin-left: 6px; font-family: var(--sans); }
+  .field input[type=color] { width: 48px; height: 36px; padding: 2px; background: var(--panel-2); border: 1px solid var(--rule); border-radius: 4px; vertical-align: middle; }
+  .save-bar { position: sticky; bottom: 0; background: var(--paper); padding: 12px 0; display: flex; gap: 12px;
+              align-items: center; flex-wrap: wrap; border-top: 1px solid var(--rule); }
+  button.primary { all: unset; cursor: pointer; background: var(--blue-deep); color: #fff; font-weight: 700;
+                   padding: 10px 18px; border-radius: 6px; min-height: 24px; }
+  button.secondary { all: unset; cursor: pointer; border: 1px solid var(--rule); color: var(--ink); font-weight: 600;
+                     padding: 9px 16px; border-radius: 6px; }
+  button.primary:disabled { opacity: .5; cursor: default; }
+  button.primary:focus-visible, button.secondary:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; }
+  footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
+
+  @media (max-width: 760px) {
+    .col-total, .col-route-text, .rate svg, .since { display: none; }
+    td, th { padding-left: 8px; padding-right: 8px; }
+    .stream { grid-template-columns: 1fr; }
+    .metric { text-align: left; }
+    .lower { grid-template-columns: 1fr; }
+    input[type=search] { width: 150px; }
+    nav.tabs button { padding: 12px 14px; }
+    .seg button { padding: 12px 14px; }
+    .field { grid-template-columns: 1fr; }
+    .field label { padding-top: 0; }
+    .tiles { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <img src="www/icon-64.png" alt="" width="44" height="44">
+      <h1><span class="b">Bato</span><span class="w">Watch</span><span class="host" id="host"></span></h1>
+    </div>
+    <svg class="pulse" viewBox="0 0 400 24" preserveAspectRatio="none" aria-hidden="true">
+      <polyline points="0,12 230,12 242,3 256,22 268,8 280,12 400,12" fill="none" stroke="currentColor"
+                stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>
+    <div class="conn" aria-live="polite"><span class="dot" id="dot"></span><span id="status">Connecting…</span></div>
+  </header>
+
+  <section class="strip" id="strip" aria-label="Status" aria-live="polite">
+    <span class="health" id="health">Checking…</span>
+  </section>
+
+  <nav class="tabs" role="tablist" id="tabs"></nav>
+
+  <!-- ===================== Hardware ===================== -->
+  <section id="tab-hardware" role="tabpanel" hidden>
+    <div class="arrange-bar"><button class="secondary" id="arrange" type="button">Customize</button></div>
+    <dialog class="customize" id="customize" aria-labelledby="cust-h">
+      <header><h2 id="cust-h" style="margin:0">Customize</h2>
+        <button class="secondary" id="cust-close" type="button">Done</button></header>
+      <div class="body" id="cust-body"></div>
+      <footer><span class="muted" style="font-size:13px;align-self:center">Saved in this browser.</span>
+        <button class="secondary" id="cust-reset" type="button">Reset</button></footer>
+    </dialog>
+    <div class="tiles" id="tiles"></div>
+    <div class="cards" id="cards"></div>
+
+    <section aria-labelledby="hist-h">
+      <div class="bar"><h2 id="hist-h">History</h2>
+        <div class="graph-tools">
+          <span class="seg" id="ranges" role="group" aria-label="Time range"></span>
+          <select id="extra-metric" aria-label="Add a graph"><option value="">Add a graph…</option></select>
+        </div>
+      </div>
+      <div id="charts"></div>
+      <h2 style="margin-top:22px">Alerts</h2>
+      <ul class="log" id="alert-log"><li><span></span><span class="k-gone">No alerts so far.</span></li></ul>
+    </section>
+
+    <details class="na" id="na">
+      <summary>Not available on this device</summary>
+      <ul id="na-list"></ul>
+    </details>
+  </section>
+
+  <!-- ===================== Network ===================== -->
+  <section id="tab-network" role="tabpanel" hidden>
+    <p class="notice" id="notice" hidden></p>
+    <section class="streams empty" id="streams" aria-label="Active Sunshine streams">
+      <p>Nobody is streaming right now.</p>
+    </section>
+    <section aria-labelledby="dev-h">
+      <div class="bar">
+        <h2 id="dev-h"><span id="count">Connected</span></h2>
+        <div class="tools">
+          <input type="search" id="q" placeholder="Filter by name, IP or port" aria-label="Filter devices">
+          <label class="chk"><input type="checkbox" id="inet" checked> Internet hosts</label>
+        </div>
+      </div>
+      <div class="scroll"><table>
+        <thead><tr>
+          <th>Device</th><th class="col-route-text">Route</th><th>Connected</th>
+          <th class="num">Traffic now</th><th class="num col-total">Received</th><th class="num col-total">Sent</th>
+        </tr></thead>
+        <tbody id="devices"><tr><td colspan="6" class="empty-row">Waiting for the first update…</td></tr></tbody>
+      </table></div>
+    </section>
+    <div class="lower">
+      <section aria-labelledby="dis-h">
+        <h2 id="dis-h">Recently disconnected</h2>
+        <ul class="log" id="history"><li><span></span><span class="k-gone">Nothing has disconnected yet.</span></li></ul>
+      </section>
+      <section aria-labelledby="act-h">
+        <h2 id="act-h">Activity</h2>
+        <ul class="log" id="events"></ul>
+      </section>
+    </div>
+    <footer id="foot"></footer>
+  </section>
+
+  <!-- ===================== Settings ===================== -->
+  <section id="tab-settings" role="tabpanel" hidden>
+    <fieldset class="settings" style="border:0;padding:0;margin:0 0 14px">
+      <div class="field" style="background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:12px 16px">
+        <label for="view-unit" style="font-family:var(--sans);font-size:15px">Temperatures in this browser</label>
+        <div><select id="view-unit">
+            <option value="">Same as BatoWatch's setting</option><option value="C">°C</option><option value="F">°F</option>
+          </select>
+          <div class="help">Only changes how this browser shows temperatures. Banners and other browsers follow TEMP_UNIT below.</div></div>
+      </div>
+    </fieldset>
+    <p class="notice" id="set-note" hidden></p>
+    <form class="settings" id="set-form" novalidate></form>
+    <div class="save-bar">
+      <button class="primary" id="save" type="button" disabled>Save changes</button>
+      <button class="secondary" id="restart" type="button" hidden>Restart to apply</button>
+      <span id="save-msg" class="muted" aria-live="polite"></span>
+    </div>
+  </section>
+</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+let state = null, settings = null, clockOffset = 0, tab = null;
+const nowSec = () => (Date.now() + clockOffset) / 1000;
+
+function bytes(n) {
+  const u = ["B","KB","MB","GB","TB"]; let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i ? n.toFixed(n < 10 ? 1 : 0) : Math.round(n)) + " " + u[i];
+}
+function bits(bps) {
+  const b = bps * 8;
+  if (b < 1e3) return Math.round(b) + " b/s";
+  if (b < 1e6) return (b / 1e3).toFixed(b < 1e4 ? 1 : 0) + " kb/s";
+  return (b / 1e6).toFixed(b < 1e7 ? 1 : 0) + " Mb/s";
+}
+function dur(sec) {
+  sec = Math.max(0, Math.floor(sec));
+  const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+  if (d) return `${d}d ${h}h`;
+  return h ? `${h}h ${String(m).padStart(2,"0")}m` : m ? `${m}m ${String(s).padStart(2,"0")}s` : `${s}s`;
+}
+const clock = t => new Date(t * 1000).toLocaleTimeString([], {hourCycle: "h23", hour: "2-digit", minute: "2-digit", second: "2-digit"});
+const stamp = t => new Date(t * 1000).toLocaleString([], {hourCycle: "h23", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"});
+
+// ----- temperature unit: this browser's choice, else BatoWatch's ---------
+function viewUnit() {
+  let v = ""; try { v = localStorage.getItem("bw-unit") || ""; } catch (e) {}
+  return v || (state && state.hw && state.hw.unit) || "C";
+}
+const temp = c => viewUnit() === "F" ? `${Math.round(c * 9 / 5 + 32)} °F` : `${Math.round(c)} °C`;
+const tempNum = c => viewUnit() === "F" ? c * 9 / 5 + 32 : c;
+function fmt(r) {
+  if (r == null || r.value == null) return "–";
+  const v = r.value;
+  switch (r.unit) {
+    case "°C": return temp(v);
+    case "%": return `${Math.round(v)}%`;
+    case "MHz": return v >= 1000 ? `${(v / 1000).toFixed(2)} GHz` : `${Math.round(v)} MHz`;
+    case "W": return `${v.toFixed(v < 10 ? 1 : 0)} W`;
+    case "MB": return v >= 1024 ? `${(v / 1024).toFixed(1)} GB` : `${Math.round(v)} MB`;
+    case "B/s": return `${bytes(v)}/s`;
+    case "RPM": return `${Math.round(v)} RPM`;
+    case "V": return `${v.toFixed(2)} V`;
+    case "A": return `${v.toFixed(2)} A`;
+    default: return String(v);
+  }
+}
+
+// ----- tabs -----------------------------------------------------------
+function tabsWanted() {
+  const on = k => !settings || (settings.settings.find(s => s.key === k) || {}).value !== "off";
+  const t = [];
+  const def = settings ? (settings.settings.find(s => s.key === "DEFAULT_TAB") || {}).value : "hardware";
+  const parts = [["hardware", "Hardware", on("HARDWARE")], ["network", "Network", on("NETWORK")]];
+  if (def === "network") parts.reverse();
+  for (const [id, label, show] of parts) if (show) t.push([id, label]);
+  t.push(["settings", "Settings"]);
+  return t;
+}
+function drawTabs() {
+  const t = tabsWanted();
+  $("tabs").innerHTML = t.map(([id, label]) =>
+    `<button role="tab" id="tb-${id}" aria-controls="tab-${id}" aria-selected="${id === tab}" data-tab="${id}">${label}</button>`).join("");
+}
+function showTab(id, push) {
+  const ids = tabsWanted().map(x => x[0]);
+  if (!ids.includes(id)) id = ids[0];
+  tab = id;
+  for (const x of ["hardware", "network", "settings"]) $("tab-" + x).hidden = x !== id;
+  drawTabs();
+  if (push && location.hash !== "#" + id) history.replaceState(null, "", "#" + id);
+  if (id === "hardware") loadCharts();
+  if (id === "settings") loadSettings();
+}
+$("tabs").addEventListener("click", ev => { const b = ev.target.closest("button[data-tab]"); if (b) showTab(b.dataset.tab, true); });
+$("tabs").addEventListener("keydown", ev => {
+  if (!["ArrowLeft", "ArrowRight"].includes(ev.key)) return;
+  const ids = tabsWanted().map(x => x[0]); let i = ids.indexOf(tab) + (ev.key === "ArrowRight" ? 1 : -1);
+  i = (i + ids.length) % ids.length; showTab(ids[i], true); $("tb-" + ids[i]).focus();
+});
+window.addEventListener("hashchange", () => showTab(location.hash.slice(1), false));
+
+// ----- status strip -----------------------------------------------------
+function renderStrip() {
+  const s = state || {};
+  const alerts = s.alerts || [];
+  const streams = s.net ? s.net.devices.filter(d => d.streaming_since) : [];
+  const strip = $("strip");
+  strip.className = "strip" + (alerts.length ? " bad" : "");
+  const parts = [`<span class="health">${alerts.length ? `${alerts.length} problem${alerts.length > 1 ? "s" : ""}` : "All good"}</span>`];
+  for (const a of alerts) parts.push(`<button class="alert" data-key="${esc(a.key)}">${esc(a.text)}</button>`);
+  if (s.net) parts.push(`<span class="item">Streaming: <b>${streams.length ? streams.map(d => esc(d.name)).join(", ") : "nobody"}</b></span>`);
+  if (s.net) parts.push(`<span class="item">Devices: <b>${s.net.devices.filter(d => d.route !== "internet").length}</b></span>`);
+  if (s.restart_needed && s.restart_needed.length) parts.push(`<span class="item">Restart needed for: <b>${s.restart_needed.map(esc).join(", ")}</b></span>`);
+  strip.innerHTML = parts.join("");
+}
+$("strip").addEventListener("click", ev => {
+  const b = ev.target.closest("button.alert"); if (!b) return;
+  showTab("hardware", true);
+  const key = b.dataset.key, kind = key.split(":")[0];
+  const card = document.querySelector(`[data-card="${{cpu_temp: "cpu", gpu_temp: "gpu", ram: "mem", disk_full: "disks", disk_health: "disks", disk_temp: "disks"}[kind] || "temps"}"]`);
+  if (card) { card.scrollIntoView({behavior: "smooth", block: "center"}); card.classList.add("flash"); setTimeout(() => card.classList.remove("flash"), 2500); }
+});
+
+// ----- hardware -----------------------------------------------------------
+const POWER_NAMES = {"CPU package": "Whole processor", "CPU cores": "Processor cores",
+                     "Integrated GPU": "Built-in graphics", "RAM": "Memory"};
+function friendlyTemp(r) {
+  const i = r.info, chip = i.chip || "";
+  if (i.kind === "disk") return r.label.replace(" temperature", "");
+  if (chip === "coretemp") { const m = r.label.match(/Core (\d+)/); return m ? `Processor core ${m[1]}` : "Processor (whole chip)"; }
+  if (chip === "k10temp" || chip === "zenpower") return "Processor" + (r.label.endsWith("Tdie") ? " (die)" : "");
+  if (r.group === "zone") return {x86_pkg_temp: "Processor", "cpu-thermal": "Processor", acpitz: "Motherboard"}[i.type] || r.label;
+  return r.label;
+}
+const tempKind = r => r.info.kind === "cpu" || /processor/i.test(friendlyTemp(r)) ? "Processor" :
+  r.info.kind === "gpu" ? "Graphics" : r.info.kind === "disk" ? "Drives" : "Other";
+const cleanCpu = m => (m || "").replace(/\((R|TM|tm|r)\)/g, "").replace(/\s+CPU\s*@.*$|\s+@.*$|\s+\d+-Core Processor$/, "").replace(/\s+/g, " ").trim();
+const ifName = i => /^(eth|en)/.test(i) ? `Wired (${i})` : /^wl/.test(i) ? `Wi-Fi (${i})` : /^tailscale/.test(i) ? "Tailscale" : i;
+// A gauge like the logo's (and the TV app's): 240 degrees, mint while normal,
+// amber close to an alert limit, red once the alert fires. CPU load never
+// warns: games use the CPU.
+function arcPath(cx, cy, r, a0, a1) {
+  const p = a => [cx + r * Math.cos(a), cy - r * Math.sin(a)];
+  const [x0, y0] = p(a0), [x1, y1] = p(a1);
+  return `M${x0.toFixed(2)},${y0.toFixed(2)} A${r},${r} 0 ${Math.abs(a0 - a1) > Math.PI ? 1 : 0} 1 ${x1.toFixed(2)},${y1.toFixed(2)}`;
+}
+function gaugeFor(r, L, st) {
+  const lim = L[r.name] || {};
+  let frac = null, level = st && st.bad ? "bad" : "ok";
+  if (r.unit === "%") {
+    frac = r.value / 100;
+    if (level === "ok" && lim.avail_pct && (r.info.avail_pct ?? 100) < lim.avail_pct * 2) level = "warn";
+  } else if (r.unit === "°C") {
+    const limit = lim.limit || r.info.crit || 100;
+    frac = r.value / limit;
+    if (level === "ok" && frac >= 0.85) level = "warn";
+  }
+  if (frac == null) return "";
+  frac = Math.max(0, Math.min(1, frac));
+  const a0 = 210 * Math.PI / 180, sweep = 240 * Math.PI / 180;
+  const color = {bad: "var(--bad)", warn: "var(--amber)"}[level] || "var(--mint)";
+  const fill = frac > 0.01 ? `<path d="${arcPath(32, 32, 28, a0, a0 - sweep * frac)}" stroke="${color}"/>` : "";
+  return `<svg class="gauge" viewBox="0 0 64 64" aria-hidden="true" fill="none" stroke-width="5" stroke-linecap="round">
+    <path d="${arcPath(32, 32, 28, a0, a0 - sweep)}" stroke="var(--rule)"/>${fill}</svg>`;
+}
+function rmap() { const m = {}; for (const r of (state.hw ? state.hw.readings : [])) m[r.name] = r; return m; }
+function status(r, limits) {
+  const l = limits[r.name]; if (!l) return null;
+  let bad = false;
+  if (l.limit != null) bad = r.value >= l.limit;
+  else if (l.avail_pct != null) bad = (r.info.avail_pct ?? 100) < l.avail_pct;
+  else if (l.free_gb != null) bad = (l.free_gb > 0 && r.info.free_gb < l.free_gb) || (l.free_pct > 0 && r.info.free_pct < l.free_pct);
+  else if (l.word === "Failing") bad = r.info.passed === false || !!r.info.critical_warning || (r.info.wear_pct ?? 0) >= 90;
+  return {bad, word: bad ? l.word : "OK"};
+}
+const word = st => st ? `<span class="word ${st.bad ? "bad" : "ok"}">${esc(st.word)}</span>` : "";
+function meter(pct, bad) { return `<div class="meter${bad ? " bad" : ""}"><i style="width:${Math.max(0, Math.min(100, pct))}%"></i></div>`; }
+
+function renderHardware() {
+  const hw = state.hw; if (!hw) return;
+  const R = rmap(), L = hw.limits || {}, S = hw.summary;
+  const tile = (key, k, r, sub) => {
+    const st = r ? status(r, L) : null;
+    const g = r ? gaugeFor(r, L, st) : "";
+    // the number large, its unit small, like a gauge readout
+    const m = r ? fmt(r).match(/^([\d.,–-]+)\s*(.*)$/) : null;
+    const v = `<div class="v">${!r ? "–" : m ? `${esc(m[1])}<span class="u">${esc(m[2])}</span>` : esc(fmt(r))}</div>`;
+    return {key, label: k, html: `<div class="tile${st && st.bad ? " bad" : ""}${g ? " has-gauge" : ""}"><div class="k"><span>${k}</span>${word(st)}</div>
+      <div class="mid"><div class="dial">${g}${v}</div></div><div class="s">${esc(sub || "")}</div></div>`};
+  };
+  const cpuT = R[S.cpu_temp], gpuT = R[S.gpu_temp], mem = R["mem.used_pct"], pw = R[S.power], dT = R[S.disk_temp];
+  const gpuBusy = Object.values(R).find(r => /\.(busy|engine_busy)$/.test(r.name));
+  $("tiles").innerHTML = arranged("tiles", [
+    tile("cpu", "CPU", R["cpu.usage"], R["cpu.freq"] ? fmt(R["cpu.freq"]) : ""),
+    tile("cputemp", "CPU temperature", cpuT, cpuT ? friendlyTemp(cpuT) : "no sensor"),
+    tile("mem", "Memory", mem, mem ? `${(mem.info.avail_mb / 1024).toFixed(1)} GB free of ${(mem.info.total_mb / 1024).toFixed(1)} GB` : ""),
+    pw ? tile("power", "Power", pw, POWER_NAMES[pw.label] || pw.label) : null,
+    gpuBusy || gpuT ? tile("gpu", "GPU", gpuBusy || gpuT, gpuBusy && gpuT ? fmt(gpuT) : "") : null,
+    dT ? tile("disk", "Hottest disk", dT, friendlyTemp(dT)) : null,
+  ].filter(Boolean));
+
+  const cards = [];
+  const rows = list => list.map(r => `<div class="row"><span class="l">${esc(r.label)}</span><span class="r">${word(status(r, L))}${fmt(r)}</span></div>`).join("");
+  // CPU
+  const cores = Object.values(R).filter(r => r.group === "cpu-core").sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
+  const cpuRows = ["cpu.usage", "cpu.freq", "cpu.load1"].map(n => R[n]).filter(Boolean);
+  if (cpuT) cpuRows.splice(1, 0, Object.assign({}, cpuT, {label: "Temperature"}));
+  const thr = R["cpu.throttled"];
+  cards.push(`<div class="card" data-card="cpu"><h2>CPU<small>${esc(cleanCpu((R["cpu.usage"] || {info: {}}).info.model))}</small></h2>
+    ${rows(cpuRows)}${thr && thr.value ? `<div class="row"><span class="l">Slowed down because it got too hot</span><span class="r"><span class="word bad">Hot</span>${thr.value}×</span></div>` : ""}
+    <div class="cores">${cores.map(c => `<div class="core"><div class="bar"><i style="height:${c.value}%"></i></div>${esc(c.label.replace("Core ", "#"))}</div>`).join("")}</div></div>`);
+  // GPU(s)
+  const gpus = {};
+  for (const r of Object.values(R)) if (r.group === "gpu" || (r.group === "temp" && r.info.kind === "gpu") || (r.group === "power" && r.info.chip && r.info.kind === "gpu")) {
+    const k = r.info.card || r.info.pdev || r.info.hwmon || r.name.split(".")[1];
+    (gpus[k] = gpus[k] || []).push(r);
+  }
+  // One group per GPU (same PCI device = same GPU), named by its model
+  const byGpu = {};
+  for (const list of Object.values(gpus)) for (const r of list) {
+    const k = r.info.pdev || r.info.card || r.info.model || "gpu";
+    (byGpu[k] = byGpu[k] || []).push(r);
+  }
+  const gpuList = Object.values(byGpu);
+  if (gpuList.length) {
+    const body = gpuList.map(list => {
+      const model = (list.find(r => r.info.model) || {info: {}}).info.model || "GPU";
+      const shown = list.filter(r => !r.name.endsWith(".present"));
+      const strip = r => Object.assign({}, r, {label: r.label.replace(model + " ", "").replace(/^./, c => c.toUpperCase())});
+      return `<h3 style="margin-top:6px">${esc(model)}</h3>` + (shown.length ? rows(shown.map(strip)) :
+        `<div class="row"><span class="l">Doesn't report load or clock</span></div>`);
+    }).join("");
+    cards.push(`<div class="card" data-card="gpu"><h2>${gpuList.length > 1 ? `GPUs<small>${gpuList.length} cards</small>` : "GPU"}</h2>${body}</div>`);
+  }
+  // Memory
+  if (mem) {
+    const st = status(mem, L);
+    const sw = R["mem.swap_used_pct"];
+    cards.push(`<div class="card" data-card="mem"><h2>Memory ${word(st)}</h2>
+      <div class="row"><span class="l">Used</span><span class="r">${fmt(mem)}</span></div>${meter(mem.value, st && st.bad)}
+      <div class="row"><span class="l">Available</span><span class="r">${fmt(R["mem.avail_mb"])} of ${(mem.info.total_mb / 1024).toFixed(1)} GB</span></div>
+      ${sw ? `<div class="row"><span class="l">Swap used</span><span class="r">${fmt(sw)}</span></div>` : ""}</div>`);
+  }
+  // Disks
+  const space = Object.values(R).filter(r => r.group === "disk");
+  const io = Object.values(R).filter(r => r.group === "diskio");
+  const smart = Object.values(R).filter(r => r.group === "smart" && r.name.endsWith(".health"));
+  if (space.length || smart.length) {
+    let h = space.map(r => { const st = status(r, L); return `<div class="row stack"><span class="l">${esc(r.info.mount)} <span class="sub">· ${esc(r.info.model || "")}</span></span>
+        <span class="r">${word(st)}${r.info.free_gb >= 10 ? Math.round(r.info.free_gb) : r.info.free_gb} GB free of ${Math.round(r.info.total_gb)} GB</span></div>${meter(r.value, st && st.bad)}`; }).join("");
+    const devs = [...new Set(io.map(r => r.name.split(".")[1]))];
+    h += devs.map(d => `<div class="row stack"><span class="l">${esc((R[`diskio.${d}.read`] || {info: {}}).info.model || d)} <span class="sub">· activity</span></span><span class="r">reading ${fmt(R[`diskio.${d}.read`])} · writing ${fmt(R[`diskio.${d}.write`])}</span></div>`).join("");
+    h += smart.map(r => { const i = r.info, st = status(r, L); const t = R[`smart.${i.dev}.temp`];
+      return `<div class="row"><span class="l">${esc(i.model || i.dev)} <span class="sub">· health</span></span>
+        <span class="r">${word(st)}</span></div><div class="muted" style="font-size:13px;padding:2px 0 6px">${[t ? fmt(t) : "",
+          i.wear_pct != null ? `${i.wear_pct}% worn` : "", i.written_gb != null ? `${bytes(i.written_gb * 1e9)} written` : "",
+          i.poh != null ? `${dur(i.poh * 3600)} powered on` : ""].filter(Boolean).join(" · ")}</div>`; }).join("");
+    const smartMissing = (hw.sources.missing || []).find(m => m.name === "smart");
+    if (smartMissing && !smart.length) h += `<div class="row"><span class="l muted">${esc(smartMissing.reason)}</span></div>`;
+    cards.push(`<div class="card" data-card="disks"><h2>Disks</h2>${h}</div>`);
+  }
+  // Power
+  const power = Object.values(R).filter(r => r.group === "power");
+  const bat = Object.values(R).filter(r => r.group === "battery");
+  if (power.length || bat.length)
+    cards.push(`<div class="card" data-card="power"><h2>Power</h2>${rows(power.map(r => Object.assign({}, r, {label: POWER_NAMES[r.label] || r.label})))}${bat.map(r =>
+      `<div class="row"><span class="l">${esc(r.label)}</span><span class="r">${fmt(r)}${r.unit === "%" && r.info.status !== "Unknown" ? ` · ${esc(r.info.status === "Full" ? "full" : r.info.status.toLowerCase())}` : ""}</span></div>`).join("")}</div>`);
+  // Temperatures, grouped by chip
+  const temps = Object.values(R).filter(r => r.group === "temp" || r.group === "zone");
+  if (temps.length) {
+    const by = {};
+    for (const r of temps.sort((a, b) => b.value - a.value)) (by[tempKind(r)] = by[tempKind(r)] || []).push(r);
+    const kinds = ["Processor", "Graphics", "Drives", "Other"].filter(k => by[k]);
+    cards.push(`<div class="card" data-card="temps"><h2>Temperatures</h2>${kinds.map(k =>
+      `<h3 style="margin-top:8px">${k}</h3>${by[k].map(r => `<div class="row"><span class="l">${esc(friendlyTemp(r))}</span><span class="r">${word(status(r, L))}${fmt(r)}</span></div>`).join("")}`).join("")}</div>`);
+  }
+  const fans = Object.values(R).filter(r => r.group === "fan" || (r.unit === "%" && r.name.endsWith(".fan")));
+  if (fans.length) cards.push(`<div class="card" data-card="fans"><h2>Fans</h2>${rows(fans)}</div>`);
+  const volts = Object.values(R).filter(r => r.group === "volt" || r.group === "curr");
+  if (volts.length) cards.push(`<div class="card" data-card="volts"><h2>Voltages</h2>${rows(volts)}</div>`);
+  const net = Object.values(R).filter(r => r.group === "net");
+  if (net.length) {
+    const ifs = [...new Set(net.map(r => r.name.split(".")[1]))];
+    cards.push(`<div class="card" data-card="net"><h2>Network</h2>${ifs.map(i =>
+      `<div class="row"><span class="l">${esc(ifName(i))}</span><span class="r">↓ ${fmt(R[`net.${i}.rx`])} ↑ ${fmt(R[`net.${i}.tx`])}</span></div>`).join("")}</div>`);
+  }
+  const me = Object.values(R).filter(r => r.group === "self");
+  if (me.length) cards.push(`<div class="card" data-card="self"><h2>BatoWatch itself</h2>${rows(me)}
+    <div class="row"><span class="l">Sampled every</span><span class="r">${hw.interval} s</span></div></div>`);
+  const up = R["uptime"];
+  if (up && cards[0]) cards[0] = cards[0].replace("</h2>", `</h2><div class="row"><span class="l">Up for</span><span class="r">${dur(up.value)}</span></div>`);
+  $("cards").innerHTML = arranged("cards", cards.map(html => {
+    const key = (html.match(/data-card="([^"]+)"/) || [])[1] || "x";
+    const label = (html.match(/<h2>([^<]*)/) || [])[1] || key;
+    return {key, label, html};
+  }));
+
+  const miss = hw.sources.missing || [];
+  $("na").hidden = !miss.length;
+  $("na-list").innerHTML = miss.map(m => `<li><b>${esc(m.title)}</b>: <span class="muted">${esc(m.reason)}</span></li>`).join("");
+  updateExtraMetrics(R);
+  liveCharts();
+}
+
+// ----- customizing tiles and cards (saved per browser) --------------------------
+// One panel lists everything with a checkbox (show) and up/down buttons, the
+// way phone settings arrange widgets; the dashboard updates behind it.
+let layout = {tiles: [], cards: [], hidden: []};
+try { layout = Object.assign(layout, JSON.parse(localStorage.getItem("bw-layout") || "{}")); } catch (e) {}
+const known = {tiles: [], cards: []};       // [{key, label}] in the current order
+function saveLayout() { try { localStorage.setItem("bw-layout", JSON.stringify(layout)); } catch (e) {} }
+function arranged(kind, items) {
+  const pos = k => { const i = layout[kind].indexOf(k); return i < 0 ? 1000 + items.findIndex(x => x.key === k) : i; };
+  items.sort((a, b) => pos(a.key) - pos(b.key));
+  known[kind] = items.map(x => ({key: x.key, label: x.label}));
+  return items.filter(x => !layout.hidden.includes(kind + ":" + x.key)).map(x => x.html).join("");
+}
+function drawCustomize() {
+  const part = (kind, title) => `<h3>${title}</h3>` + known[kind].map((x, i) => {
+    const on = !layout.hidden.includes(kind + ":" + x.key);
+    return `<div class="crow${on ? "" : " off"}"><label><input type="checkbox" data-kind="${kind}" data-k="${esc(x.key)}"${on ? " checked" : ""}>
+        ${esc(x.label)}</label>
+      <button type="button" data-move="-1" data-kind="${kind}" data-k="${esc(x.key)}" aria-label="Move ${esc(x.label)} up"${i ? "" : " disabled"}>↑</button>
+      <button type="button" data-move="1" data-kind="${kind}" data-k="${esc(x.key)}" aria-label="Move ${esc(x.label)} down"${i < known[kind].length - 1 ? "" : " disabled"}>↓</button></div>`;
+  }).join("");
+  $("cust-body").innerHTML = part("tiles", "Top row") + part("cards", "Cards") +
+    `<p class="help">Untick what you don't need; ↑ ↓ change the order.</p>`;
+}
+$("cust-body").addEventListener("change", ev => {
+  const c = ev.target.closest("input[type=checkbox]"); if (!c) return;
+  const hk = c.dataset.kind + ":" + c.dataset.k;
+  layout.hidden = c.checked ? layout.hidden.filter(x => x !== hk) : [...layout.hidden, hk];
+  saveLayout(); renderHardware(); drawCustomize();
+});
+$("cust-body").addEventListener("click", ev => {
+  const b = ev.target.closest("button[data-move]"); if (!b) return;
+  const {kind, k} = b.dataset, order = known[kind].map(x => x.key);
+  const i = order.indexOf(k), j = i + Number(b.dataset.move);
+  if (j < 0 || j >= order.length) return;
+  [order[i], order[j]] = [order[j], order[i]];
+  layout[kind] = order; saveLayout(); renderHardware(); drawCustomize();
+  $("cust-body").querySelector(`button[data-move="${b.dataset.move}"][data-kind="${kind}"][data-k="${CSS.escape(k)}"]:not(:disabled)`)?.focus();
+});
+$("arrange").addEventListener("click", () => { drawCustomize(); $("customize").showModal(); });
+$("cust-close").addEventListener("click", () => $("customize").close());
+$("cust-reset").addEventListener("click", () => { layout = {tiles: [], cards: [], hidden: []}; saveLayout(); renderHardware(); drawCustomize(); });
+
+// ----- graphs ---------------------------------------------------------------
+const RANGES = ["1h", "24h", "7d", "30d", "1y"];
+let range = "1h", chartData = {}, games = [], extra = [];
+try { range = localStorage.getItem("bw-range") || "1h"; extra = JSON.parse(localStorage.getItem("bw-extra") || "[]"); } catch (e) {}
+$("ranges").innerHTML = RANGES.map(r => `<button aria-pressed="${r === range}" data-r="${r}">${r}</button>`).join("");
+$("ranges").addEventListener("click", ev => {
+  const b = ev.target.closest("button[data-r]"); if (!b) return;
+  range = b.dataset.r; try { localStorage.setItem("bw-range", range); } catch (e) {}
+  for (const x of $("ranges").children) x.setAttribute("aria-pressed", x.dataset.r === range);
+  loadCharts();
+});
+
+// Graph lines are never red or orange: on a graph those read as "something is wrong"
+const LINE_COLORS = ["#6fd0ff", "#7fe3c3", "#a78bfa", "#c9d6ea"];
+function chartSpecs() {
+  if (!state || !state.hw) return [];
+  const S = state.hw.summary, R = rmap(), specs = [];
+  specs.push({id: "cpu", title: "CPU load", unit: "%", lines: [["cpu.usage", "CPU", css("--blue")]], max: 100});
+  const t = [S.cpu_temp, S.gpu_temp, S.disk_temp].filter(Boolean);
+  if (t.length) specs.push({id: "temp", title: "Temperatures", unit: "°C", lines: t.map((n, i) => [n, R[n] ? friendlyTemp(R[n]) : n, LINE_COLORS[i]])});
+  specs.push({id: "mem", title: "Memory used", unit: "%", lines: [["mem.used_pct", "Memory", css("--mint")]], max: 100});
+  const pw = Object.values(R).filter(r => r.group === "power").slice(0, 3);
+  if (pw.length) specs.push({id: "power", title: "Power", unit: "W", lines: pw.map((r, i) => [r.name, POWER_NAMES[r.label] || r.label, LINE_COLORS[i]])});
+  const g = Object.values(R).find(r => /\.(busy|engine_busy)$/.test(r.name));
+  if (g) specs.push({id: "gpu", title: "GPU load", unit: "%", lines: [[g.name, g.info.model || "GPU", LINE_COLORS[0]]], max: 100});
+  for (const n of extra) if (R[n]) specs.push({id: "x-" + n, title: R[n].label, unit: R[n].unit, lines: [[n, R[n].label, css("--blue")]], removable: n});
+  return specs;
+}
+function updateExtraMetrics(R) {
+  const sel = $("extra-metric");
+  if (sel.dataset.n == String(Object.keys(R).length)) return;
+  sel.dataset.n = Object.keys(R).length;
+  const opts = Object.values(R).filter(r => typeof r.value === "number" && !r.info.no_history && !["cpu.usage", "mem.used_pct"].includes(r.name))
+    .sort((a, b) => a.label.localeCompare(b.label));
+  sel.innerHTML = `<option value="">Add a graph…</option>` + opts.map(r => `<option value="${esc(r.name)}">${esc(r.label)}</option>`).join("");
+}
+$("extra-metric").addEventListener("change", ev => {
+  const n = ev.target.value; ev.target.value = "";
+  if (!n || extra.includes(n)) return;
+  extra.push(n); try { localStorage.setItem("bw-extra", JSON.stringify(extra)); } catch (e) {}
+  loadCharts();
+});
+
+let loading = false;
+async function loadCharts() {
+  if (!state || !state.hw || tab !== "hardware" || loading) return;
+  const specs = chartSpecs(); const names = [...new Set(specs.flatMap(s => s.lines.map(l => l[0])))];
+  if (!names.length) return;
+  loading = true;
+  try {
+    const r = await fetch(`api/history?range=${range}&metrics=${encodeURIComponent(names.join(","))}`);
+    if (r.ok) { const j = await r.json(); chartData = j.series; games = j.games || []; }
+  } catch (e) {} finally { loading = false; }
+  const box = $("charts");
+  box.innerHTML = specs.map(s => `<div class="chart" data-id="${esc(s.id)}"><div class="ct"><b>${esc(s.title)}</b>
+     <span class="rd" aria-live="polite"></span>${s.removable ? `<button class="secondary" data-rm="${esc(s.removable)}" style="padding:2px 10px" aria-label="Remove this graph">✕</button>` : ""}</div>
+     <canvas role="img" aria-label="${esc(s.title)} over ${range}"></canvas>
+     <div class="legend">${s.lines.map(l => `<span><i style="background:${l[2]}"></i>${esc(l[1])}</span>`).join("")}${games.length ? `<span><i style="background:rgba(127,227,195,.25)"></i>Game running</span>` : ""}</div></div>`).join("");
+  specs.forEach(s => drawChart(box.querySelector(`[data-id="${CSS.escape(s.id)}"]`), s));
+}
+$("charts").addEventListener("click", ev => {
+  const b = ev.target.closest("button[data-rm]"); if (!b) return;
+  extra = extra.filter(n => n !== b.dataset.rm); try { localStorage.setItem("bw-extra", JSON.stringify(extra)); } catch (e) {}
+  loadCharts();
+});
+let lastLive = 0;
+function liveCharts() {           // the 1h view follows live data; longer ranges reload every minute
+  const now = Date.now();
+  if (tab !== "hardware") return;
+  if ((range === "1h" && now - lastLive > 10000) || now - lastLive > 60000 || !$("charts").children.length) { lastLive = now; loadCharts(); }
+}
+
+function drawChart(el, spec, hoverX) {
+  const cv = el.querySelector("canvas"), dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth, h = cv.clientHeight; cv.width = w * dpr; cv.height = h * dpr;
+  const g = cv.getContext("2d"); g.scale(dpr, dpr); g.clearRect(0, 0, w, h);
+  const conv = spec.unit === "°C" ? tempNum : (x => x);
+  const series = spec.lines.map(l => (chartData[l[0]] || []).map(p => [p[0], conv(p[1]), conv(p[2]), conv(p[3])]));
+  const all = series.flat();
+  const tMax = nowSec(), tMin = tMax - {"1h": 3600, "24h": 86400, "7d": 604800, "30d": 2592000, "1y": 31536000}[range];
+  let vMax = spec.max || Math.max(1, ...all.map(p => p[3])) * 1.1, vMin = 0;
+  if (spec.unit === "°C") { vMin = Math.max(0, Math.min(...all.map(p => p[1]), conv(20)) - 5); vMax = Math.max(...all.map(p => p[3]), conv(50)) + 5; }
+  const padL = 44, padB = 18, W = w - padL - 6, H = h - padB - 6;
+  const X = t => padL + (t - tMin) / (tMax - tMin) * W, Y = v => 6 + H - (v - vMin) / (vMax - vMin) * H;
+  // game sessions
+  g.fillStyle = "rgba(127,227,195,.13)";
+  for (const s of games) { const a = X(Math.max(s.t0, tMin)), b = X(Math.min(s.t1 || tMax, tMax)); if (b > a) g.fillRect(a, 6, Math.max(2, b - a), H); }
+  // grid + labels
+  g.strokeStyle = css("--rule"); g.fillStyle = css("--muted"); g.font = "11px system-ui"; g.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const v = vMin + (vMax - vMin) * i / 4, y = Y(v);
+    g.beginPath(); g.moveTo(padL, y); g.lineTo(w - 6, y); g.stroke();
+    g.fillText(spec.unit === "°C" ? Math.round(v) + "°" : spec.unit === "%" ? Math.round(v) + "%" : spec.unit === "B/s" ? bytes(v) : Math.round(v * 10) / 10 + "", 2, y + 4);
+  }
+  for (let i = 0; i <= 4; i++) {
+    const t = tMin + (tMax - tMin) * i / 4;
+    const lab = range === "1h" || range === "24h" ? new Date(t * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", hourCycle: "h23"})
+                : new Date(t * 1000).toLocaleDateString([], {month: "short", day: "numeric"});
+    g.fillText(lab, Math.min(w - 40, Math.max(padL, X(t) - 16)), h - 4);
+  }
+  // limit line, if there is one
+  const lim = state.hw.limits[spec.lines[0][0]];
+  if (lim && lim.limit != null) { g.strokeStyle = css("--muted"); g.setLineDash([4, 4]); const y = Y(conv(lim.limit)); if (y > 6) { g.beginPath(); g.moveTo(padL, y); g.lineTo(w - 6, y); g.stroke(); } g.setLineDash([]); }
+  series.forEach((pts, i) => {
+    const color = spec.lines[i][2];
+    if (pts.length > 1 && range !== "1h") {        // min-max band
+      g.fillStyle = color + "26"; g.beginPath();
+      pts.forEach((p, j) => j ? g.lineTo(X(p[0]), Y(p[3])) : g.moveTo(X(p[0]), Y(p[3])));
+      for (let j = pts.length - 1; j >= 0; j--) g.lineTo(X(pts[j][0]), Y(pts[j][1]));
+      g.closePath(); g.fill();
+    }
+    g.strokeStyle = color; g.lineWidth = 1.8; g.beginPath();
+    let prev = null;
+    for (const p of pts) {
+      const x = X(p[0]), y = Y(p[2]);
+      if (prev && p[0] - prev > (tMax - tMin) / 60) g.moveTo(x, y); else if (prev === null) g.moveTo(x, y); else g.lineTo(x, y);
+      prev = p[0];
+    }
+    g.stroke();
+  });
+  const rd = el.querySelector(".rd");
+  if (hoverX != null && hoverX >= padL) {
+    const t = tMin + (hoverX - padL) / W * (tMax - tMin);
+    g.strokeStyle = css("--muted"); g.beginPath(); g.moveTo(hoverX, 6); g.lineTo(hoverX, 6 + H); g.stroke();
+    const vals = series.map((pts, i) => { let best = null; for (const p of pts) if (!best || Math.abs(p[0] - t) < Math.abs(best[0] - t)) best = p; return best ? [spec.lines[i][1], best] : null; }).filter(Boolean);
+    const game = games.find(s => s.t0 <= t && (s.t1 || tMax) >= t);
+    rd.textContent = `${stamp(t)}: ` + vals.map(([n, p]) => `${n} ${unitText(p[2], spec.unit)}`).join(", ") + (game ? ` · playing ${game.text}` : "");
+  } else {
+    rd.textContent = series.length && series[0].length ? `now ${unitText(series[0][series[0].length - 1][2], spec.unit)}` : "no data yet";
+  }
+  cv.onpointermove = cv.onpointerdown = ev => { const r = cv.getBoundingClientRect(); drawChart(el, spec, ev.clientX - r.left); };
+  cv.onpointerleave = () => drawChart(el, spec, null);
+}
+function unitText(v, unit) {
+  if (unit === "°C") return `${Math.round(v)} °${viewUnit()}`;
+  if (unit === "B/s") return bytes(v) + "/s";
+  return `${Math.round(v * 10) / 10}${unit ? (unit === "%" ? "%" : " " + unit) : ""}`;
+}
+
+async function loadAlerts() {
+  try {
+    const r = await fetch("api/alerts"); if (!r.ok) return; const j = await r.json();
+    $("alert-log").innerHTML = j.past.length ? j.past.map(a => `<li><time>${stamp(a.t0).split(", ").pop()}</time>
+      <span class="${a.t1 ? "k-gone" : "k-warn"}"><b>${esc(a.text)}</b> <span class="dir">${stamp(a.t0)}${a.t1 ? `, lasted ${dur(a.t1 - a.t0)}` : ", still going"}</span></span></li>`).join("")
+      : `<li><span></span><span class="k-gone">No alerts in the last 30 days.</span></li>`;
+  } catch (e) {}
+}
+
+// ----- network (from NetWatch) ------------------------------------------------
+const ROUTES = {
+  "tailnet-direct": ["Tailscale, direct", "--r-direct"], "tailnet-relay": ["Tailscale, relayed", "--r-relay"],
+  "tailnet": ["Tailscale", "--r-direct"], "subnet-router": ["Via subnet router", "--r-router"],
+  "lan": ["Home network", "--r-lan"], "gateway": ["Router", "--r-gateway"], "container": ["Container", "--r-container"],
+  "private": ["Other private network", "--r-container"], "link-local": ["Link-local", "--r-container"],
+  "internet": ["Internet", "--r-internet"],
+};
+const ORDER = ["tailnet-direct","tailnet-relay","tailnet","subnet-router","lan","gateway","container","private","link-local","internet"];
+const expanded = new Set();
+const spark = new Map();
+const route = r => ROUTES[r] || [r, "--r-container"];
+function sparkSvg(ip, w, h, color) {
+  const pts = spark.get(ip) || [];
+  if (pts.length < 2) return `<svg width="${w}" height="${h}" aria-hidden="true"></svg>`;
+  const max = Math.max(...pts, 1), step = w / (pts.length - 1);
+  const line = pts.map((v, i) => `${(i * step).toFixed(1)},${(h - 1 - (v / max) * (h - 2)).toFixed(1)}`).join(" ");
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true"><polyline points="${line}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linejoin="round"/></svg>`;
+}
+function describe(d) { return [d.ip, d.os, d.mac].filter(Boolean).join(", "); }
+function renderStreams(devs) {
+  const live = devs.filter(d => d.streaming_since), el = $("streams");
+  if (!live.length) { el.className = "streams empty"; el.innerHTML = "<p>Nobody is streaming right now.</p>"; return; }
+  el.className = "streams";
+  el.innerHTML = live.map(d => {
+    const [label, v] = route(d.route);
+    const warn = d.route === "tailnet-relay" ? " Relayed connections are bandwidth-limited; expect lower quality." : "";
+    return `<div class="stream"><div><div class="stream-name">${esc(d.name)}</div>
+        <div class="stream-sub"><i style="background:${css(v)}"></i>${esc(label)}, ${esc(d.ip)}.${warn}</div></div>
+      <div class="metric"><b data-since="${d.streaming_since}"></b><small>streaming</small></div>
+      <div class="metric"><b>${bits(d.rate_out)}</b><small>${sparkSvg(d.ip, 140, 28, css("--mint"))}</small></div></div>`;
+  }).join("");
+}
+function flowTable(d) {
+  if (!d.flows.length) return `<p class="dir">No open connections. It will drop off the list shortly.</p>`;
+  return `<table class="flows"><thead><tr><th>Service</th><th>Protocol</th><th>Direction</th><th>Port</th><th>Their ports</th>
+      <th>Program</th><th class="num">Connections</th><th class="num">Received</th><th class="num">Sent</th></tr></thead><tbody>` +
+    d.flows.map(f => `<tr><td>${esc(f.service || "unlabelled")}</td><td>${esc(f.proto)}</td>
+      <td class="dir">${f.dir === "in" ? "Incoming" : "Outgoing"}</td><td>${f.side === "local" ? "this box " : "their "}${f.port}</td><td>${esc(f.peers)}</td>
+      <td>${esc(f.proc === "-" ? "unknown" : f.proc)}</td><td class="num">${f.count}</td><td class="num">${bytes(f.in)}</td><td class="num">${bytes(f.out)}</td></tr>`).join("") + `</tbody></table>`;
+}
+function renderDevices(devs) {
+  const q = $("q").value.trim().toLowerCase(), showInet = $("inet").checked;
+  const rows = devs.filter(d => showInet || d.route !== "internet")
+    .filter(d => !q || [d.name, d.ip, d.mac, d.os, ...d.flows.map(f => f.port + " " + f.service + " " + f.proc)].some(x => String(x ?? "").toLowerCase().includes(q)))
+    .sort((a, b) => (!!b.streaming_since - !!a.streaming_since) || (ORDER.indexOf(a.route) - ORDER.indexOf(b.route)) || (a.first_seen - b.first_seen));
+  const streaming = devs.filter(d => d.streaming_since).length;
+  $("count").textContent = `Streaming (${streaming}) · Connected (${rows.length}${rows.length !== devs.length ? " of " + devs.length : ""})`;
+  if (!rows.length) {
+    $("devices").innerHTML = `<tr><td colspan="6" class="empty-row">${devs.length ? "No devices match this filter." : "No devices are connected. Start a Moonlight stream or open an SSH session and it will appear here."}</td></tr>`;
+    return;
+  }
+  $("devices").innerHTML = rows.map(d => {
+    const [label, v] = route(d.route), open = expanded.has(d.ip), pre = d.exact ? "" : "at least ";
+    return `<tr class="dev${d.idle ? " idle" : ""}" style="--route:var(${v})">
+      <td class="who"><button aria-expanded="${open}" data-ip="${esc(d.ip)}">
+        <div class="nm">${esc(d.name === d.ip ? d.ip : d.name)}${d.streaming_since ? '<span class="live">Streaming</span>' : ""}</div>
+        <div class="meta">${esc(d.name === d.ip ? [d.os, d.mac].filter(Boolean).join(", ") || "No name found" : describe(d))}</div></button></td>
+      <td class="col-route-text"><span class="route"><i></i>${esc(label)}</span></td>
+      <td><span data-since="${d.first_seen}" data-pre="${pre}"></span><span class="since">since ${clock(d.first_seen)}${d.exact ? "" : " or earlier"}</span></td>
+      <td class="num"><div class="rate">${sparkSvg(d.ip, 72, 20, css(v))}<span>${bits(d.rate_in + d.rate_out)}</span></div></td>
+      <td class="num col-total">${bytes(d.bytes_in)}</td><td class="num col-total">${bytes(d.bytes_out)}</td></tr>` +
+      (open ? `<tr class="detail" style="--route:var(${v})"><td colspan="6">${flowTable(d)}</td></tr>` : "");
+  }).join("");
+}
+function kind(text) { return {">": "k-start", "*": "k-start", "!": "k-warn", "-": "k-gone", "<": "k-gone"}[text[0]] || ""; }
+function hms(s) { const p = s.split(":").map(Number); return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : NaN; }
+const who = (name, ip) => name === ip ? ip : `${name} (${ip})`;
+function tidy(text) {
+  let m;
+  if ((m = text.match(/^\+ (.+) \(([^,]+), ([a-z-]+)\)$/))) return `${who(m[1], m[2])} connected over ${route(m[3])[0].toLowerCase().replace("tailscale", "Tailscale")}`;
+  if ((m = text.match(/^- (.+) \(([^)]+)\) gone after (\S+)$/))) return `${who(m[1], m[2])} disconnected after ${dur(hms(m[3]))}`;
+  if ((m = text.match(/^> Sunshine stream started: (.+) \((.+)\)$/))) return `${m[1]} started streaming`;
+  if ((m = text.match(/^< Sunshine stream ended: (.+) after (\S+)$/))) return `${m[1]} stopped streaming after ${dur(hms(m[2]))}`;
+  if ((m = text.match(/^~ Sunshine stream already active: (.+)$/))) return `${m[1]} was already streaming when BatoWatch started`;
+  if ((m = text.match(/^\* NOTIFY: (.+)$/))) return `Showed on screen: "${m[1]}"`;
+  return text.replace(/^[>*!+\-<~] /, "");
+}
+function renderNetwork() {
+  const s = state.net; if (!s) return;
+  const notes = [];
+  if (s.tailscale_error) notes.push(`Tailscale names are unavailable: ${s.tailscale_error}.`);
+  if (!s.counters) notes.push("Traffic counters are off, so byte totals and stream-end detection are limited.");
+  $("notice").hidden = !notes.length; $("notice").textContent = notes.join(" ");
+  renderStreams(s.devices); renderDevices(s.devices);
+  $("history").innerHTML = s.history.length ? s.history.map(h => `<li><time>${clock(h.t)}</time><span><b>${esc(h.name)}</b>
+      <span class="dir">${esc(route(h.route)[0])}, connected ${dur(h.duration)}, received ${bytes(h.bytes_in)}, sent ${bytes(h.bytes_out)}</span></span></li>`).join("")
+    : `<li><span></span><span class="k-gone">Nothing has disconnected yet.</span></li>`;
+  $("events").innerHTML = s.events.map(e => `<li><time>${clock(e.t)}</time><span class="${kind(e.text)}">${esc(tidy(e.text))}</span></li>`).join("");
+  $("foot").textContent = `Sunshine base port ${s.sunshine_base}. Tailscale's own tunnel traffic is hidden.`;
+}
+$("devices").addEventListener("click", ev => {
+  const btn = ev.target.closest("button[data-ip]"); if (!btn) return;
+  const ip = btn.dataset.ip; expanded.has(ip) ? expanded.delete(ip) : expanded.add(ip);
+  renderNetwork(); document.querySelector(`button[data-ip="${CSS.escape(ip)}"]`)?.focus();
+});
+$("q").addEventListener("input", () => state && renderNetwork());
+$("inet").addEventListener("change", () => state && renderNetwork());
+
+// ----- settings ----------------------------------------------------------------
+let dirty = {};
+async function fetchSettings() {
+  try { const r = await fetch("api/settings"); if (r.ok) settings = await r.json(); } catch (e) {}
+  return settings;
+}
+async function loadSettings() {
+  await fetchSettings(); if (!settings) return;
+  dirty = {}; $("save").disabled = true; $("save-msg").textContent = "";
+  const note = [];
+  if (!settings.editable) note.push(`The dashboard login is off, so settings can only be changed in ${settings.conf}.`);
+  if (settings.unknown.length) note.push(`Not recognised in the settings file (ignored): ${settings.unknown.join(", ")}.`);
+  $("set-note").hidden = !note.length; $("set-note").textContent = note.join(" ");
+  $("restart").hidden = !settings.restart_needed.length;
+  const secs = {};
+  for (const s of settings.settings) (secs[s.section] = secs[s.section] || []).push(s);
+  const ro = settings.editable ? "" : " disabled";
+  $("set-form").innerHTML = Object.entries(secs).map(([name, list]) => `<fieldset><legend>${esc(name)}</legend>${list.map(s => {
+    let input;
+    const id = "f-" + s.key;
+    if (s.kind === "login") {
+      const mode = s.value === "batocera" || s.value === "none" ? s.value : "own";
+      const user = mode === "own" ? s.value.split(":")[0] : "";
+      input = `<select id="${id}" data-key="${s.key}" data-login="mode"${ro}>
+          <option value="batocera"${mode === "batocera" ? " selected" : ""}>Batocera root password (user root)</option>
+          <option value="own"${mode === "own" ? " selected" : ""}>My own user name and password</option>
+          <option value="none"${mode === "none" ? " selected" : ""}>Off (anyone on the network)</option></select>
+        <div data-own${mode === "own" ? "" : " hidden"} style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+          <input type="text" data-login="user" placeholder="User name" value="${esc(user)}" autocomplete="username"${ro}>
+          <input type="password" data-login="pw" placeholder="${mode === "own" ? "Unchanged" : "Password"}" autocomplete="new-password"${ro}></div>`;
+    } else if (s.choices) {
+      input = `<select id="${id}" data-key="${s.key}"${ro}>${s.choices.map(c => `<option${c === s.value ? " selected" : ""}>${esc(c)}</option>`).join("")}</select>`;
+    } else if (s.kind === "bool") {
+      input = `<select id="${id}" data-key="${s.key}"${ro}><option${s.value === "on" ? " selected" : ""}>on</option><option${s.value === "off" ? " selected" : ""}>off</option></select>`;
+    } else if (s.kind === "color") {
+      input = `<input type="color" value="${esc(s.value)}" data-mirror="${id}"${ro}> <input type="text" id="${id}" data-key="${s.key}" value="${esc(s.value)}" size="9"${ro}>`;
+    } else {
+      input = `<input type="text" id="${id}" data-key="${s.key}" value="${esc(s.value)}" size="${s.kind === "str" || s.kind === "list" ? 34 : 10}"${ro}>`;
+    }
+    return `<div class="field"><label for="${id}">${esc(s.key)}${s.live ? "" : '<span class="tag">restart</span>'}</label><div>${input}
+      <div class="help">${esc(s.help)} <span class="muted">(default: ${esc(s.default === "" ? "empty" : s.default)})</span></div>
+      ${s.error ? `<div class="err">In the file: ${esc(s.error.text)}. ${esc(s.error.error)}; using the default.</div>` : ""}
+      <div class="err" data-err="${s.key}"></div></div></div>`;
+  }).join("")}</fieldset>`).join("");
+}
+function loginValue(form) {
+  const mode = form.querySelector('[data-login="mode"]').value;
+  if (mode !== "own") return mode;
+  const user = form.querySelector('[data-login="user"]').value.trim(), pw = form.querySelector('[data-login="pw"]').value;
+  return pw ? `${user}:${pw}` : `${user}:`;
+}
+$("set-form").addEventListener("input", ev => {
+  let t = ev.target;
+  if (t.dataset.mirror) { const txt = $(t.dataset.mirror); txt.value = t.value; t = txt; }
+  if (t.dataset.login) {
+    const f = $("set-form"); f.querySelector("[data-own]").hidden = f.querySelector('[data-login="mode"]').value !== "own";
+    dirty.LOGIN = loginValue(f);
+  } else if (t.dataset.key) dirty[t.dataset.key] = t.value;
+  $("save").disabled = !Object.keys(dirty).length;
+  $("save-msg").textContent = Object.keys(dirty).length ? "Unsaved changes" : "";
+});
+$("save").addEventListener("click", async () => {
+  document.querySelectorAll("[data-err]").forEach(e => e.textContent = "");
+  $("save").disabled = true; $("save-msg").textContent = "Saving…";
+  let r, j = {};
+  try { r = await fetch("api/settings", {method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({mtime: settings.mtime, changes: dirty})}); j = await r.json(); } catch (e) {}
+  if (!r || !r.ok) {
+    $("save").disabled = false;
+    $("save-msg").textContent = (j && j.error) || "Couldn't save.";
+    for (const [k, msg] of Object.entries((j && j.fields) || {})) { const e = document.querySelector(`[data-err="${k}"]`); if (e) e.textContent = msg; }
+    return;
+  }
+  const port = dirty.WEB_PORT, https = dirty.HTTPS;
+  dirty = {};
+  if (j.restart) return waitRestart(port, https);
+  $("save-msg").textContent = "Saved. It applies now.";
+  await loadSettings(); drawTabs();
+});
+$("restart").addEventListener("click", async () => {
+  try { await fetch("api/restart", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"}); } catch (e) {}
+  waitRestart();
+});
+function waitRestart(port, https) {
+  const proto = https === "off" ? "http:" : https ? "https:" : location.protocol;
+  if ((port && port !== location.port) || proto !== location.protocol) {
+    const url = `${proto}//${location.hostname}:${port || location.port}/#settings`;
+    $("save-msg").innerHTML = `Saved. BatoWatch is restarting on a new address: <a href="${esc(url)}" style="color:var(--blue)">${esc(url)}</a>`;
+    return;
+  }
+  $("save-msg").textContent = "Saved. BatoWatch is restarting to apply it…";
+  let tries = 0;
+  const poll = setInterval(async () => {
+    tries++;
+    try { const r = await fetch("healthz", {cache: "no-store"}); if (r.ok && tries > 2) { clearInterval(poll); location.reload(); } } catch (e) {}
+    if (tries > 40) { clearInterval(poll); $("save-msg").textContent = "BatoWatch hasn't come back yet. Check its log."; }
+  }, 1500);
+}
+$("view-unit").addEventListener("change", ev => {
+  try { ev.target.value ? localStorage.setItem("bw-unit", ev.target.value) : localStorage.removeItem("bw-unit"); } catch (e) {}
+  if (state) { renderHardware(); loadCharts(); }
+});
+try { $("view-unit").value = localStorage.getItem("bw-unit") || ""; } catch (e) {}
+
+// ----- live updates -----------------------------------------------------------
+function tickTimers() {
+  const now = nowSec();
+  document.querySelectorAll("[data-since]").forEach(el => { el.textContent = (el.dataset.pre || "") + dur(now - Number(el.dataset.since)); });
+  if (state) $("status").textContent = `Live, updated ${clock(state.now)}`;
+}
+let alertsLoaded = 0;
+function ingest(s) {
+  clockOffset = s.now * 1000 - Date.now();
+  if (s.net) {
+    $("host").textContent = `${s.net.host}${s.net.local_ips.length ? " · " + s.net.local_ips.filter(ip => !ip.includes(":")).join(", ") : ""}${s.version ? " · v" + s.version : ""}`;
+    for (const d of s.net.devices) { const a = spark.get(d.ip) || []; a.push(d.rate_in + d.rate_out); if (a.length > 60) a.shift(); spark.set(d.ip, a); }
+    for (const ip of spark.keys()) if (!s.net.devices.some(d => d.ip === ip)) spark.delete(ip);
+  }
+  if (!s.net && s.version) $("host").textContent = `v${s.version}`;
+  const firstHw = !state || !state.hw;
+  state = s;
+  renderStrip();
+  if (s.hw) renderHardware();
+  if (s.net) renderNetwork();
+  if (firstHw && s.hw && tab === "hardware") loadCharts();
+  if (Date.now() - alertsLoaded > 30000) { alertsLoaded = Date.now(); loadAlerts(); }
+  tickTimers();
+}
+function connect() {
+  const es = new EventSource("api/events");
+  es.onmessage = ev => { $("dot").className = "dot"; ingest(JSON.parse(ev.data)); };
+  es.onerror = () => { $("dot").className = "dot down"; $("status").textContent = "Lost connection to BatoWatch. Reconnecting…"; };
+}
+window.addEventListener("resize", () => { if (tab === "hardware") loadCharts(); });
+setInterval(tickTimers, 1000);
+(async () => {
+  await fetchSettings();
+  const ids = tabsWanted().map(x => x[0]);
+  showTab(ids.includes(location.hash.slice(1)) ? location.hash.slice(1) : ids[0], false);
+  try { const r = await fetch("api/state"); if (r.ok) ingest(await r.json()); } catch (e) {}
+  connect();
+})();
+</script>
+</body>
+</html>
