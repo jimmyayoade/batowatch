@@ -49,7 +49,7 @@ from history import History           # noqa: E402
 # Bump with every change that ships: 1.0.1 a fix, 1.1.0 a new feature, 2.0.0 a
 # change that breaks something (like the settings format). The installer
 # reads it from this line to say what it installs or updates.
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 BATOWATCH_HOME = os.environ.get("BATOWATCH_HOME", "/userdata/system/add-ons/batowatch")
 OVERLAY_SCRIPT = os.path.join(APP_DIR, "overlay.py")

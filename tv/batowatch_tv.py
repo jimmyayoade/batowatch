@@ -77,17 +77,16 @@ STYLE_ICON = {"xbox": {"A": "A", "B": "B", "X": "X", "Y": "Y"},
               "playstation": {"A": "✕", "B": "○", "X": "□", "Y": "△"},
               "nintendo": {"A": "B", "B": "A", "X": "Y", "Y": "X"},
               "generic": {"A": "A", "B": "B", "X": "X", "Y": "Y"},
-              "keyboard": {"A": "Enter", "B": "Esc", "X": "[", "Y": "]", "LB": "Shift+Tab", "RB": "Tab",
-                           "START": "R", "BACK": "M"}}
-# Keyboard: arrows move, Enter opens, Esc goes back (on the main screen it opens
-# Settings, which has Exit), Tab / Shift+Tab switch tabs, [ ] zoom, R refreshes,
-# M opens Settings, Q quits. The old keys (PageUp/PageDown, F1, F5) still work.
+              "keyboard": {"A": "Enter", "B": "Backspace", "X": "[", "Y": "]", "LB": "Shift+Tab",
+                           "RB": "Tab", "START": "Space", "BACK": "R", "EXIT": "Esc"}}
+# Keyboard: arrows move, Enter opens, Backspace goes back, Tab / Shift+Tab
+# switch tabs, [ ] zoom, Space is Start (Settings), R is Select (Refresh), and
+# Esc exits, like Hotkey + Start on a pad. PageUp/PageDown, F1 and F5 still work.
 KEYS = {pygame.K_UP: "up", pygame.K_DOWN: "down", pygame.K_LEFT: "left", pygame.K_RIGHT: "right",
-        pygame.K_RETURN: "a", pygame.K_KP_ENTER: "a", pygame.K_ESCAPE: "b", pygame.K_BACKSPACE: "b",
+        pygame.K_RETURN: "a", pygame.K_KP_ENTER: "a", pygame.K_BACKSPACE: "b", pygame.K_ESCAPE: "quit",
         pygame.K_TAB: "rb", pygame.K_PAGEUP: "lb", pygame.K_PAGEDOWN: "rb",
         pygame.K_LEFTBRACKET: "x", pygame.K_RIGHTBRACKET: "y",
-        pygame.K_m: "back", pygame.K_F1: "back", pygame.K_r: "start", pygame.K_F5: "start",
-        pygame.K_q: "quit"}
+        pygame.K_SPACE: "start", pygame.K_F1: "start", pygame.K_r: "back", pygame.K_F5: "back"}
 DEADZONE = 0.5
 REPEAT = 0.22
 
@@ -235,7 +234,6 @@ class App:
         self.detail = None              # ("hw", section, sel) or ("dev", ip, sel)
         self.menu = None                # settings menu index, or None
         self.style_override = self.prefs.get("style")
-        self.kbd = not self.joys        # hints show keyboard keys after a key press, pad buttons after a button
         self.map = load_map()
         if self.map:
             BTN.update(self.map)
@@ -493,9 +491,14 @@ class App:
             return f"{v:.0f} RPM"
         return str(v)
 
+    @property
+    def kbd(self):
+        """No controller plugged in: the hints name keyboard keys."""
+        return pygame.joystick.get_count() == 0
+
     def icons(self):
-        """How buttons are named: the keyboard's keys if that's what was used
-        last, else the way the pad labels them (A, ✕, B, ○...)."""
+        """How buttons are named: the way the pad labels them (A, ✕, B, ○...),
+        or the keyboard's keys when no controller is plugged in."""
         return STYLE_ICON["keyboard" if self.kbd else detect_style(self.style_override)]
 
     def badge(self, key, pos, anchor="midleft", font=None):
@@ -512,10 +515,10 @@ class App:
         return box
 
     def hint(self, items):
-        """The button bar at the bottom of every screen. On a keyboard, Q
-        quits (a pad has Hotkey + Start)."""
+        """The button bar at the bottom of every screen. On a keyboard, Esc
+        exits (a pad has Hotkey + Start)."""
         if self.kbd:
-            items = list(items) + [("Q", "Exit")]
+            items = list(items) + [("EXIT", "Exit")]
         bar = pygame.Rect(0, self.H - self.s(64), self.W, self.s(64))
         pygame.draw.rect(self.screen, PANEL, bar)
         pygame.draw.line(self.screen, RULE, bar.topleft, bar.topright)
@@ -884,7 +887,7 @@ class App:
         secs = self.sections()
         if not secs:
             self.text("Waiting for BatoWatch…", self.f_mid, MUTED, (self.W // 2, self.H // 2), "center")
-            self.hint([("RB", "Network"), ("BACK", "Settings")])
+            self.hint([("RB", "Network"), ("START", "Settings")])
             return
         self.sel = max(0, min(self.sel, len(secs) - 1))
         left_w = self.s(500)
@@ -927,7 +930,7 @@ class App:
         for i, (title, names) in enumerate(specs):
             self.draw_graph((gx, gy + i * gh, gw, gh - self.s(10)), names, title)
         self.hint([("A", "Open"), ("RB", "Network"), ("X", "Zoom in"), ("Y", "Zoom out"),
-                   ("START", "Refresh"), ("BACK", "Settings")])
+                   ("BACK", "Refresh"), ("START", "Settings")])
 
     # -- section pages: plain-language tables ----------------------------------
     SUBTITLES = {
@@ -1193,7 +1196,7 @@ class App:
         if not net:
             self.text("The network part is turned off (NETWORK=off).", self.f_mid, MUTED,
                       (self.W // 2, self.H // 2), "center")
-            self.hint([("LB", "Hardware"), ("BACK", "Settings")])
+            self.hint([("LB", "Hardware"), ("START", "Settings")])
             return
         devs = [d for d in net["devices"] if d["route"] != "internet"]
         devs.sort(key=lambda d: (not d.get("streaming_since"), d["first_seen"]))
@@ -1239,7 +1242,7 @@ class App:
             self.text(f"{route}  ·  {human_dur(time.time() - d['first_seen'])}  ·  "
                       f"{human_bits(d['rate_in'] + d['rate_out'])}", self.f, MUTED,
                       (right, rect.centery), "midright")
-        self.hint([("A", "Details"), ("LB", "Hardware"), ("START", "Refresh"), ("BACK", "Settings")])
+        self.hint([("A", "Details"), ("LB", "Hardware"), ("BACK", "Refresh"), ("START", "Settings")])
 
     def draw_device(self, ip):
         net = (self.api.state or {}).get("net") or {}
@@ -1290,7 +1293,7 @@ class App:
             return False
         order = [("A", "Confirm / open"), ("B", "Back"), ("X", "Zoom graphs in (less time)"),
                  ("Y", "Zoom graphs out (more time)"), ("LB", "Previous tab"), ("RB", "Next tab"),
-                 ("BACK", "Settings (Select / Back / Share)"), ("START", "Refresh (Start / Menu)")]
+                 ("BACK", "Refresh (Select / Back / Share)"), ("START", "Settings (Start / Menu)")]
         mapping, held, start, idx = {}, None, 0, 0
         pygame.event.get()
         while idx < len(order):
@@ -1340,13 +1343,8 @@ class App:
                 act = KEYS.get(e.key)
                 if act == "rb" and e.key == pygame.K_TAB and e.mod & pygame.KMOD_SHIFT:
                     act = "lb"
-                if act:
-                    self.kbd = True
                 out.append(act)
-            elif e.type in (pygame.JOYBUTTONDOWN, pygame.JOYHATMOTION) or (
-                    e.type == pygame.JOYAXISMOTION and abs(e.value) >= DEADZONE):
-                self.kbd = False
-            if e.type == pygame.JOYBUTTONDOWN:
+            elif e.type == pygame.JOYBUTTONDOWN:
                 for name, num in BTN.items():
                     if e.button == num:
                         out.append(name.lower())
@@ -1381,7 +1379,7 @@ class App:
                 self.menu = (self.menu - 1) % len(self.MENU)
             elif act == "down":
                 self.menu = (self.menu + 1) % len(self.MENU)
-            elif act in ("b", "back"):
+            elif act in ("b", "start"):
                 self.menu = None
             elif self.MENU[self.menu] == "Size" and act in ("left", "right", "a"):
                 names = list(SIZES)
@@ -1403,9 +1401,9 @@ class App:
         elif act in ("lb", "rb"):
             self.tab = 1 - self.tab
             self.sel, self.detail = 0, None
-        elif act == "back":
-            self.menu = 0
         elif act == "start":
+            self.menu = 0
+        elif act == "back":
             self.api.refresh()
             self.flash = ("Refreshed", time.time())
         elif act in ("x", "y"):
@@ -1419,8 +1417,6 @@ class App:
                 self.sel += 1          # draw_section wraps back to the first page
         elif act in ("up", "down"):
             self.sel += -1 if act == "up" else 1
-        elif act == "b" and self.kbd:
-            self.menu = 0          # Esc on the main screen: Settings, where Exit is
         elif act == "a":
             if self.tab == 0:
                 secs = self.sections()
@@ -1471,7 +1467,7 @@ class App:
                 self.api.error is None or now < self.wait_until))
             down = not loading and self.api.state is None and self.api.error is not None
             if loading:
-                if any(a == "b" for a in acts):
+                if any(a in ("b", "quit") for a in acts):
                     self.running = False
                 self.draw_loading()
                 pygame.display.flip()
@@ -1483,7 +1479,7 @@ class App:
                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     self.api.refresh()
                     self.wait_until = time.time() + 20
-                elif down and a in ("b", "back"):
+                elif down and a == "b":
                     self.running = False
                 else:
                     self.handle(a)

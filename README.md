@@ -66,14 +66,14 @@ Open **Ports → BatoWatch**. The first time, it asks you to hold each button so
 |------------|----------|------|
 | D-pad / left stick | Arrow keys | Move |
 | A | Enter | Open a section |
-| B | Esc | Back (on the main screen, Esc opens Settings) |
+| B | Backspace | Back |
 | LB / RB | Shift+Tab / Tab | Switch between Hardware and Network |
 | X / Y | [ / ] | Zoom the graphs in and out (1 hour … 1 year) |
-| Start | R | Refresh |
-| Back (Select) | M | Settings: size of everything, controller layout, button setup |
-| Hotkey + Start | Q | Exit |
+| Start | Space | Settings: size of everything, controller layout, button setup |
+| Back (Select) | R | Refresh |
+| Hotkey + Start | Esc | Exit |
 
-The hints at the bottom of the screen show whichever you used last.
+The hints at the bottom of the screen show controller buttons, or keyboard keys when no controller is plugged in.
 
 ## 🔔 On-screen messages
 
