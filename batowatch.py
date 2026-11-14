@@ -552,6 +552,7 @@ class Env:
         self.rdns_q = queue.Queue(maxsize=256)
         self.owners = {}             # (proto, local port) -> process name
         self.owners_at = 0.0
+        self.own_ports = {}          # port -> label, for BatoWatch's own sockets
         self.last_refresh = 0.0
         threading.Thread(target=self._rdns_worker, daemon=True).start()
 
@@ -756,7 +757,8 @@ class Env:
             self.rdns[ip] = (name, time.time())
 
     def port_label(self, port):
-        return self.sun.labels.get(port) or COMMON_PORTS.get(port, "")
+        return (self.sun.labels.get(port) or self.own_ports.get(port)
+                or COMMON_PORTS.get(port, ""))
 
 
 # ---------------------------------------------------------------- tracker ---
@@ -1769,6 +1771,8 @@ def main():
         LOG.warning("both NETWORK and HARDWARE are off; only the dashboard runs")
 
     app.env = Env(app.nargs)
+    if c["WEB_PORT"]:
+        app.env.own_ports[c["WEB_PORT"]] = "batowatch-web"
     app.env.refresh(force=True)
     log = lambda text: (app.tracker.log(text) if app.tracker else LOG.info(text))  # noqa: E731
     notifier = Notifier(c, log)
