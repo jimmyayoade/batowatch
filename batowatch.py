@@ -509,6 +509,13 @@ class TailscaleClient:
         self.sock_path = sock_path
 
     def status(self):
+        return self._get("/localapi/v0/status")
+
+    def derp_map(self):
+        """Tailscale's relay (DERP) servers, as tailscaled currently knows them."""
+        return self._get("/localapi/v0/derpmap")
+
+    def _get(self, path):
         class Conn(http.client.HTTPConnection):
             def connect(conn):
                 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -518,7 +525,7 @@ class TailscaleClient:
 
         c = Conn("local-tailscaled.sock", timeout=3)
         try:
-            c.request("GET", "/localapi/v0/status",
+            c.request("GET", path,
                       headers={"Host": "local-tailscaled.sock", "Sec-Tailscale": "localapi"})
             r = c.getresponse()
             if r.status != 200:
@@ -540,6 +547,8 @@ class Env:
         self.local_nets = []         # (network, ifname), excluding tailscale0
         self.ts_peers = {}           # tailnet ip -> peer info
         self.ts_endpoints = set()    # (ip, port) of peer WireGuard endpoints
+        self.ts_derp = set()         # IPs of Tailscale's relay (DERP) servers
+        self.ts_derp_at = 0.0
         self.router_ips = set(args.subnet_router)
         self.gateways = set()        # default-route next hops (IPv4 and IPv6)
         self.ts_error = None
@@ -660,6 +669,25 @@ class Env:
                     if self._in_lan(host):
                         routers.add(host)
         self.ts_peers, self.ts_endpoints, self.router_ips = peers, endpoints, routers
+        if time.time() - self.ts_derp_at > 3600:
+            self._read_derp_map()
+
+    def _read_derp_map(self):
+        """The relay servers' addresses. tailscaled's checks of them (TLS and
+        STUN) last under a second, so by the time a flow is seen its socket,
+        and with it the owner (tailscaled), can already be gone."""
+        try:
+            dm = self.ts.derp_map()
+        except (OSError, ValueError, http.client.HTTPException):
+            return              # keep the last list; try again on the next refresh
+        derp = set()
+        for region in (dm.get("Regions") or {}).values():
+            for node in (region or {}).get("Nodes") or []:
+                for key in ("IPv4", "IPv6"):
+                    ip = node.get(key)
+                    if ip and ip != "none":
+                        derp.add(ip.lower())
+        self.ts_derp, self.ts_derp_at = derp, time.time()
 
     # -- lookups -----------------------------------------------------------
     def _iface_for(self, ip):
@@ -720,8 +748,11 @@ class Env:
 
     def is_transport(self, f):
         """Tailscale's own plumbing: the WireGuard tunnel, STUN, DERP, control
-        plane, and MagicDNS. Identified by the owning process, not the port."""
+        plane, and MagicDNS. Identified by the owning process, not the port,
+        and by the relay servers' addresses (see _read_derp_map)."""
         if f.proc == "tailscaled" or f.remote == TS_SERVICE_IP:
+            return True
+        if f.remote.lower() in self.ts_derp:
             return True
         return f.proto == 17 and (f.lport == self.args.wg_port
                                   or (f.remote, f.rport) in self.ts_endpoints)
