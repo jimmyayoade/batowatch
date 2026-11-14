@@ -235,6 +235,142 @@ def ct_events(handler):
                 handler("destroy", f)
 
 
+# ------------------------------------------------- packet-counting source ---
+# Batocera 43's kernel can't switch connection tracking on (no usable
+# netfilter), so the table above stays empty. bw-flows (flows/bw-flows.c)
+# counts packets per connection instead and prints one JSON line a second.
+FLOWS_HELPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bw-flows")
+PROTO_NUMS = {v: k for k, v in PROTO_NAMES.items()}
+
+
+def server_ports():
+    """{(proto, port)} of local sockets that wait for others: listening TCP
+    sockets and unconnected UDP sockets. Tells which end of a flow is the
+    server, which packet counts alone can't."""
+    ports = set()
+    for proto, names in ((6, ("tcp", "tcp6")), (17, ("udp", "udp6"))):
+        for name in names:
+            try:
+                fh = open(f"/proc/net/{name}")
+            except OSError:
+                continue
+            with fh:
+                next(fh, None)
+                for line in fh:
+                    p = line.split()
+                    if len(p) < 4:
+                        continue
+                    if proto == 6 and p[3] != "0A":          # TCP_LISTEN
+                        continue
+                    if proto == 17 and not p[2].endswith(":0000"):
+                        continue
+                    try:
+                        ports.add((proto, int(p[1].rsplit(":", 1)[1], 16)))
+                    except (IndexError, ValueError):
+                        pass
+    return ports
+
+
+class PacketFlows:
+    """Runs bw-flows and turns its one-way counts into Flows, so dump() can
+    stand in for ct_dump(). A conversation with no packets for TCP_IDLE /
+    OTHER_IDLE seconds counts as closed."""
+    TCP_IDLE, OTHER_IDLE = 120, 30
+
+    def __init__(self, path, env):
+        self.path, self.env = path, env
+        self.lock = threading.Lock()
+        self.latest = None
+        self.proc = None
+        self.stopping = False
+        self.ready = threading.Event()
+        threading.Thread(target=self._run, daemon=True, name="bw-flows").start()
+
+    def _run(self):
+        while not self.stopping:
+            err = ""
+            try:
+                self.proc = subprocess.Popen([self.path, "-i", "1"], stdout=subprocess.PIPE,
+                                             stderr=subprocess.PIPE, text=True)
+                for line in self.proc.stdout:
+                    try:
+                        d = json.loads(line)
+                    except ValueError:
+                        continue
+                    with self.lock:
+                        self.latest = d
+                    self.ready.set()
+                err = self.proc.stderr.read().strip()
+                rc = self.proc.wait()
+                err = f"bw-flows exited with status {rc}" + (f": {err[-300:]}" if err else "")
+            except OSError as e:
+                err = f"bw-flows could not start: {e}"
+            if not self.stopping:
+                LOG.warning(f"{err}; restarting in 5s")
+                time.sleep(5)
+
+    def stop(self):
+        self.stopping = True
+        if self.proc and self.proc.poll() is None:
+            self.proc.terminate()
+
+    def _inbound(self, proto, lport, rport, servers):
+        """True when the remote end started the conversation."""
+        if lport in self.env.sun.labels:
+            return True
+        local_srv = (proto, lport) in servers
+        remote_srv = rport in COMMON_PORTS or rport < 1024
+        if local_srv != remote_srv:
+            return local_srv
+        return lport < rport      # otherwise the lower port is the server's
+
+    def dump(self):
+        with self.lock:
+            d = self.latest
+        if not d:
+            return {}
+        now = d["time"]
+        convs = {}
+        for _iface, direction, proto, src, sport, dst, dport, pkts, nbytes, last in d["flows"]:
+            pnum = PROTO_NUMS.get(proto)
+            if pnum is None:
+                try:
+                    pnum = int(proto)
+                except ValueError:
+                    continue
+            if direction == "in":
+                key = (pnum, dst, dport, src, sport)      # proto, local, lport, remote, rport
+            else:
+                key = (pnum, src, sport, dst, dport)
+            c = convs.setdefault(key, [0, 0, 0, 0, 0])     # pkts in, bytes in, pkts out, bytes out, last
+            i = 0 if direction == "in" else 2
+            c[i] += pkts
+            c[i + 1] += nbytes
+            c[4] = max(c[4], last)
+        servers = server_ports()
+        flows = {}
+        for (pnum, loc, lport, rem, rport), (pi, bi, po, bo, last) in convs.items():
+            if now - last > (self.TCP_IDLE if pnum == 6 else self.OTHER_IDLE):
+                continue
+            f = Flow()
+            f.proto = pnum
+            if self._inbound(pnum, lport, rport, servers):
+                f.osrc, f.osport, f.odst, f.odport = rem, rport, loc, lport
+                f.pkts_o, f.bytes_o, f.pkts_r, f.bytes_r = pi, bi, po, bo
+            else:
+                f.osrc, f.osport, f.odst, f.odport = loc, lport, rem, rport
+                f.pkts_o, f.bytes_o, f.pkts_r, f.bytes_r = po, bo, pi, bi
+            f.has_counters = True
+            f.start = f.state = None
+            f.key = ("pkt", pnum, loc, lport, rem, rport)
+            f.seen = 0.0
+            f.direction = f.remote = None
+            f.lport = f.rport = 0
+            f.proc = None
+            flows[f.key] = f
+        return flows
+
+
 # ---------------------------------------------------------------- helpers ---
 TS_V4 = ipaddress.ip_network("100.64.0.0/10")
 TS_V6 = ipaddress.ip_network("fd7a:115c:a1e0::/48")
@@ -663,6 +799,10 @@ class Tracker:
         self.tombstones = set()   # conntrack keys we've retired but the kernel still lists
         self.bootstrapping = True
         self.hook = None          # hook(kind, phase, ip, name) for the network history
+        self.source = "conntrack" # or "packets" (bw-flows)
+
+    def counters_on(self):
+        return self.source == "packets" or read_sysctl("nf_conntrack_acct") == "1"
 
     def log(self, text):
         now = time.time()
@@ -918,7 +1058,7 @@ class Tracker:
             "now": now, "host": socket.gethostname(),
             "local_ips": sorted(ip for ip in env.local_ips if not ip.startswith(("127.", "::1"))),
             "sunshine_base": env.sun.base, "tailscale_error": env.ts_error,
-            "counters": read_sysctl("nf_conntrack_acct") == "1",
+            "counters": self.counters_on(), "source": self.source,
             "devices": devices,
             "history": [{"t": t, "name": n, "ip": ip, "route": r, "duration": dur,
                          "bytes_in": bi, "bytes_out": bo}
@@ -932,11 +1072,10 @@ class Tracker:
         devs = sorted(self.devices.values(),
                       key=lambda d: (d.stream_since is None, order.get(env.classify(d.ip), 5),
                                      d.first_seen))
-        acct = read_sysctl("nf_conntrack_acct")
         out = [f"BatoWatch  {time.strftime('%H:%M:%S')}  devices={len(devs)} "
                f"flows={len(self.flow_dev)}  sunshine-base={env.sun.base}  "
                f"tailscale={'ok' if not env.ts_error else 'ERR ' + env.ts_error}  "
-               f"acct={'on' if acct == '1' else 'OFF'}", ""]
+               f"source={self.source}  acct={'on' if self.counters_on() else 'OFF'}", ""]
         out.append(f"{'DEVICE':34} {'PATH':15} {'SINCE':9} {'DURATION':9} "
                    f"{'IN':>8} {'OUT':>8}  NOTE")
         for d in devs:
@@ -1308,6 +1447,23 @@ def read_sysctl(name):
         return None
 
 
+def flow_source(env):
+    """PacketFlows when bw-flows is installed, else None (conntrack).
+    bw-flows is used whenever it's there, so a box behaves the same whether
+    or not something else happens to have switched connection tracking on
+    (on Batocera 42 that was Tailscale's firewall rules, added after boot).
+    BATOWATCH_FLOWS=conntrack forces the old source."""
+    if os.environ.get("BATOWATCH_FLOWS") == "conntrack":
+        LOG.info("network: connection tracking (BATOWATCH_FLOWS=conntrack)")
+        return None
+    if not os.access(FLOWS_HELPER, os.X_OK):
+        LOG.warning(f"network: {FLOWS_HELPER} is missing, so using connection tracking; "
+                    "on kernels where nothing switches it on, the Network tab stays empty")
+        return None
+    LOG.info(f"network: counting packets with {FLOWS_HELPER}")
+    return PacketFlows(FLOWS_HELPER, env)
+
+
 def prepare_kernel():
     if not os.path.isdir("/sys/module/nf_conntrack_netlink"):
         try:
@@ -1387,6 +1543,7 @@ class App:
         self.start_values = dict(self.cfg.values)
         self.hub = Hub()
         self.stopping = False
+        self.stop_hooks = []      # called on shutdown (e.g. stop bw-flows)
         self.env = self.tracker = self.monitor = self.alerts = None
         self.hw_hist = self.net_hist = None
         self.certs = None
@@ -1496,6 +1653,11 @@ class App:
 
     def shutdown(self):
         self.stopping = True
+        for stop in self.stop_hooks:
+            try:
+                stop()
+            except Exception:
+                pass
         for h in (self.hw_hist, self.net_hist):
             if h:
                 try:
@@ -1611,15 +1773,23 @@ def main():
     log = lambda text: (app.tracker.log(text) if app.tracker else LOG.info(text))  # noqa: E731
     notifier = Notifier(c, log)
 
+    dump_flows, packets = ct_dump, None
     if c["NETWORK"]:
-        prepare_kernel()
         app.tracker = Tracker(app.env, app.nargs, notifier)
         app.tracker.NOTIFY_COOLDOWN = c["CONNECT_REPEAT"]
+        packets = flow_source(app.env)
+        if packets:
+            dump_flows = packets.dump
+            app.tracker.source = "packets"
+            app.stop_hooks.append(packets.stop)
+            packets.ready.wait(3)
+        else:
+            prepare_kernel()
         app.net_hist = History(os.path.join(app.hist_dir, "network.db"), app.keep())
         app.net_hist.close_open_events(time.time())
         app.tracker.hook = app.net_hook({})
         try:
-            dump = ct_dump()
+            dump = dump_flows()
         except OSError as e:
             LOG.critical(f"conntrack dump failed: {e}")
             sys.exit(1)
@@ -1689,7 +1859,8 @@ def main():
                     app.tracker.log(f"! event socket error: {e}; retrying")
                 time.sleep(5)
 
-    threading.Thread(target=event_loop, daemon=True, name="conntrack").start()
+    if not packets:
+        threading.Thread(target=event_loop, daemon=True, name="conntrack").start()
     tty = sys.stdout.isatty()
     tracker, env = app.tracker, app.env
     last_traffic = last_flush = time.time()
@@ -1697,7 +1868,7 @@ def main():
         time.sleep(app.nargs.interval)
         env.refresh()
         try:
-            dump = ct_dump()
+            dump = dump_flows()
         except OSError as e:
             with tracker.lock:
                 tracker.log(f"! dump failed: {e}")

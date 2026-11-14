@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <time.h>
@@ -320,6 +321,11 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    // Stop when BatoWatch does, even if it dies without stopping us.
+    prctl(PR_SET_PDEATHSIG, SIGTERM);
+    if (getppid() == 1)
+        return 0;
+
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
     signal(SIGPIPE, on_signal);
@@ -328,7 +334,7 @@ int main(int argc, char **argv)
     uint64_t packets = 0, drops = 0;
     struct timespec t0, tnow;
     clock_gettime(CLOCK_MONOTONIC, &t0);
-    time_t next_report = time(NULL) + interval;
+    double next_report = interval;     // seconds since start (monotonic)
     unsigned block = 0;
 
     while (!stop) {
@@ -369,13 +375,15 @@ int main(int argc, char **argv)
             }
             continue;
         }
-        time_t now = time(NULL);
-        if (now >= next_report) {
+        if (wall >= next_report) {
+            time_t now = time(NULL);
             if (getsockopt(fd, SOL_PACKET, PACKET_STATISTICS, &st, &sl) == 0)
                 drops += st.tp_drops;      // reading resets the kernel's counters
             expire(now);
             report_json(now, packets, drops);
-            next_report = now + interval;
+            next_report += interval;
+            if (next_report < wall)        // fell behind (suspend): don't burst
+                next_report = wall + interval;
         }
     }
     munmap(ring, (size_t)BLOCK_SIZE * BLOCK_COUNT);
