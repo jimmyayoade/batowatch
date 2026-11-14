@@ -19,3 +19,16 @@ jobs:
         run: |
           python3 tests/test_fake_trees.py
           python3 tests/test_settings_auth.py
+  flows:
+    # The bw-flows helper: static build on both architectures, then a short
+    # run (it needs root for its packet socket) to check the ring buffer works.
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: flows/build.sh
+      - name: Run
+        run: sudo "flows/bw-flows-$(uname -m)" -t 2

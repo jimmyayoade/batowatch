@@ -5,7 +5,25 @@ on:
 permissions:
   contents: write
 jobs:
+  flows:
+    # bw-flows, the packet-counting helper, built for each architecture
+    # BatoWatch runs on and attached to the release.
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: flows/build.sh
+      - name: Run
+        run: sudo "flows/bw-flows-$(uname -m)" -t 2
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bw-flows-${{ matrix.runner }}
+          path: flows/bw-flows-*
   release:
+    needs: flows
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,7 +43,16 @@ jobs:
           v="${GITHUB_REF_NAME#v}"
           awk -v v="$v" '$0 ~ "^## "v" " {on=1; next} on && /^## / {exit} on' CHANGELOG.md > notes.md
           [ -s notes.md ] || { echo "CHANGELOG.md has no section for ${v}"; exit 1; }
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bw-flows-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          ls dist/bw-flows-x86_64 dist/bw-flows-aarch64
+          (cd dist && sha256sum bw-flows-* > SHA256SUMS && cat SHA256SUMS)
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${GITHUB_REF_NAME}" --title "BatoWatch ${GITHUB_REF_NAME#v}" --notes-file notes.md
+        run: gh release create "${GITHUB_REF_NAME}" --title "BatoWatch ${GITHUB_REF_NAME#v}" --notes-file notes.md dist/bw-flows-x86_64 dist/bw-flows-aarch64 dist/SHA256SUMS
