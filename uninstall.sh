@@ -1,7 +1,7 @@
 #!/bin/bash
 # BatoWatch uninstaller for Batocera. Removes BatoWatch, its service, its
 # settings, its logs (including logs moved elsewhere in batowatch.conf), its
-# Ports entry, and anything an old NetWatch install left behind.
+# Ports entry and its uninstaller.
 #
 # Asks first whether to keep the history. Yes (the button the BUA app
 # selects first) keeps it in /userdata/system/batowatch_history, where a later
@@ -15,8 +15,6 @@
 INSTALL_DIR="/userdata/system/add-ons/batowatch"
 SERVICE="/userdata/system/services/batowatch"
 HISTORY_BACKUP="/userdata/system/batowatch_history"
-NETWATCH_DIR="/userdata/system/add-ons/netwatch"
-NETWATCH_SERVICE="/userdata/system/services/netwatch"
 PORTS_DIR="/userdata/roms/ports"
 PORT_SCRIPT="${PORTS_DIR}/BatoWatch.sh"
 PORT_IMAGE="${PORTS_DIR}/images/batowatch-logo.png"
@@ -113,51 +111,8 @@ main() {
     rm -f "${log}" "${log}".[0-9]* "${slog}" "${slog}".[0-9]*
     rm -rf "${INSTALL_DIR}"
 
-    # NetWatch, which BatoWatch replaced, no longer has a menu entry of its own
-    if [ -d "${NETWATCH_DIR}" ] || [ -f "${NETWATCH_SERVICE}" ]; then
-        echo "Removing what NetWatch left..."
-        remove_netwatch
-    fi
-
     echo "BatoWatch has been removed."
     return 0
-}
-
-remove_netwatch() {
-    local nw_log nw_slog
-    read -r nw_log nw_slog < <(
-        set +eu
-        # shellcheck disable=SC2034  # netwatch.conf may use it
-        NETWATCH_HOME="${NETWATCH_DIR}"
-        NETWATCH_LOG=""
-        NETWATCH_SERVICE_LOG=""
-        # shellcheck disable=SC1091
-        [ -f "${NETWATCH_DIR}/netwatch.conf" ] && . "${NETWATCH_DIR}/netwatch.conf" >/dev/null 2>&1
-        NETWATCH_LOG="${NETWATCH_LOG:-${NETWATCH_DIR}/netwatch.log}"
-        NETWATCH_SERVICE_LOG="${NETWATCH_SERVICE_LOG:-$(dirname "${NETWATCH_LOG}")/netwatch-service.log}"
-        printf '%s %s\n' "${NETWATCH_LOG}" "${NETWATCH_SERVICE_LOG}"
-    )
-    batocera-services stop netwatch >/dev/null 2>&1
-    batocera-services disable netwatch >/dev/null 2>&1
-    [ -x "${NETWATCH_SERVICE}" ] && "${NETWATCH_SERVICE}" stop >/dev/null 2>&1
-    rm -f "${NETWATCH_SERVICE}" /var/run/netwatch.pid
-    rm -f "${nw_log}" "${nw_log}".[0-9]* "${nw_slog}" "${nw_slog}".[0-9]*
-    rm -rf "${NETWATCH_DIR}"
-    # ...and the BUA app's install history mustn't list it any more
-    local history="/userdata/system/add-ons/bua_history.json"
-    if [ -f "${history}" ]; then
-        python3 - "${history}" << 'EOF' || true
-import json, os, sys
-path = sys.argv[1]
-with open(path) as fh:
-    data = json.load(fh)
-if isinstance(data, dict) and "NetWatch" in data:
-    del data["NetWatch"]
-    with open(path + ".tmp", "w") as fh:
-        json.dump(data, fh, indent=2)
-    os.replace(path + ".tmp", path)
-EOF
-    fi
 }
 
 main "$@"

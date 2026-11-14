@@ -4,8 +4,6 @@
 
 BatoWatch keeps an eye on your Batocera box: **how its hardware is doing** (temperatures, load, memory, power, disks) and **who is connected to it** (Moonlight streams, devices on your network and over Tailscale). It keeps a history, warns you on screen when something is wrong, and shows it all on a web dashboard and on your TV.
 
-BatoWatch replaces **NetWatch**. If NetWatch is installed, BatoWatch takes over: your settings and device names come along, and NetWatch is removed.
-
 x86_64 (PC) Batocera. ARM devices will follow. See [CHANGELOG.md](CHANGELOG.md) for what's new.
 
 ---

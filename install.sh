@@ -3,8 +3,6 @@
 # hardware is doing, with history, alerts and a dashboard. Run it again to
 # update; batowatch.conf, aliases.conf and the history are kept.
 #
-# It replaces NetWatch: an installed NetWatch is stopped, its settings and
-# aliases are carried over, and everything it left is removed.
 #   curl -L https://raw.githubusercontent.com/jimmyayoade/batowatch/main/install.sh | bash
 #
 # It installs a tagged release: the newest one, or the one named:
@@ -16,8 +14,6 @@ BATOWATCH_VERSION="${BATOWATCH_VERSION:-latest}"
 INSTALL_DIR="/userdata/system/add-ons/batowatch"
 SERVICE="/userdata/system/services/batowatch"
 HISTORY_BACKUP="/userdata/system/batowatch_history"
-NETWATCH_DIR="/userdata/system/add-ons/netwatch"
-NETWATCH_SERVICE="/userdata/system/services/netwatch"
 PORTS_DIR="/userdata/roms/ports"
 PORT_SCRIPT="${PORTS_DIR}/BatoWatch.sh"
 PORT_IMAGE="${PORTS_DIR}/images/batowatch-logo.png"
@@ -91,53 +87,6 @@ login_text() {
     esac
 }
 
-# Everything NetWatch left: read its conf the way its own uninstaller does,
-# to find logs moved elsewhere.
-remove_netwatch() {
-    local nw_log nw_slog
-    read -r nw_log nw_slog < <(
-        set +eu
-        # shellcheck disable=SC2034  # netwatch.conf may use it
-        NETWATCH_HOME="${NETWATCH_DIR}"
-        NETWATCH_LOG=""
-        NETWATCH_SERVICE_LOG=""
-        # shellcheck disable=SC1091
-        [ -f "${NETWATCH_DIR}/netwatch.conf" ] && . "${NETWATCH_DIR}/netwatch.conf" >/dev/null 2>&1
-        NETWATCH_LOG="${NETWATCH_LOG:-${NETWATCH_DIR}/netwatch.log}"
-        NETWATCH_SERVICE_LOG="${NETWATCH_SERVICE_LOG:-$(dirname "${NETWATCH_LOG}")/netwatch-service.log}"
-        printf '%s %s\n' "${NETWATCH_LOG}" "${NETWATCH_SERVICE_LOG}"
-    )
-    batocera-services stop netwatch >/dev/null 2>&1 || true
-    batocera-services disable netwatch >/dev/null 2>&1 || true
-    [ -x "${NETWATCH_SERVICE}" ] && "${NETWATCH_SERVICE}" stop >/dev/null 2>&1
-    rm -f "${NETWATCH_SERVICE}" /var/run/netwatch.pid
-    if [ -n "${nw_log}" ]; then
-        rm -f "${nw_log}" "${nw_log}".[0-9]*
-    fi
-    if [ -n "${nw_slog}" ]; then
-        rm -f "${nw_slog}" "${nw_slog}".[0-9]*
-    fi
-    rm -rf "${NETWATCH_DIR}"
-    forget_netwatch
-}
-
-# NetWatch is gone, so the BUA app's install history mustn't list it any more:
-# it would show as installed with nothing to update or remove it.
-forget_netwatch() {
-    local history="/userdata/system/add-ons/bua_history.json"
-    [ -f "${history}" ] || return 0
-    python3 - "${history}" << 'EOF' || true
-import json, os, sys
-path = sys.argv[1]
-with open(path) as fh:
-    data = json.load(fh)
-if isinstance(data, dict) and "NetWatch" in data:
-    del data["NetWatch"]
-    with open(path + ".tmp", "w") as fh:
-        json.dump(data, fh, indent=2)
-    os.replace(path + ".tmp", path)
-EOF
-}
 
 # The TV app in Ports: launcher, logo, and one gamelist entry. No .keys file:
 # Batocera's own Hotkey+Start (KEY_EXIT) closes it.
@@ -171,7 +120,7 @@ EOF
 # sources this script and has its own EXIT trap, which would be replaced.
 main() (
     set -euo pipefail
-    local tmp src version f had_netwatch="" carried="" unknown="" aliases_carried="" history_dir
+    local tmp src version f history_dir
     local restored="" added="" new_version old_version stopped="" has_flows
 
     if [ "$(uname -m)" != "x86_64" ]; then
@@ -273,31 +222,9 @@ main() (
     else
         cp "${src}/batowatch.conf" "${INSTALL_DIR}/batowatch.conf"
         chmod 600 "${INSTALL_DIR}/batowatch.conf"
-        if [ -f "${NETWATCH_DIR}/netwatch.conf" ]; then
-            read -r carried unknown < <(python3 "${INSTALL_DIR}/settings.py" convert \
-                "${NETWATCH_DIR}/netwatch.conf" "${INSTALL_DIR}/batowatch.conf" | python3 -c '
-import json, sys
-j = json.load(sys.stdin)
-print(",".join(j["carried"]) or "-", ",".join(j["unknown"]) or "-")')
-        fi
     fi
     if [ ! -f "${INSTALL_DIR}/aliases.conf" ]; then
-        if [ -f "${NETWATCH_DIR}/aliases.conf" ]; then
-            cp "${NETWATCH_DIR}/aliases.conf" "${INSTALL_DIR}/aliases.conf"
-            # only when it names a device (NetWatch's stock file is all comments)
-            if grep -qvE '^[[:space:]]*(#|$)' "${INSTALL_DIR}/aliases.conf"; then
-                aliases_carried=1
-            fi
-        else
-            cp "${src}/aliases.conf" "${INSTALL_DIR}/aliases.conf"
-        fi
-    fi
-
-    # NetWatch is replaced: stop it and remove everything it left
-    if [ -d "${NETWATCH_DIR}" ] || [ -f "${NETWATCH_SERVICE}" ]; then
-        had_netwatch=1
-        echo "Replacing NetWatch..."
-        remove_netwatch
+        cp "${src}/aliases.conf" "${INSTALL_DIR}/aliases.conf"
     fi
 
     # History kept by an earlier uninstall comes back
@@ -341,16 +268,6 @@ EOF
     # One short summary box. The BUA app shows it at the end; the log gets the
     # same text with bare addresses (see dashboard_addresses).
     local notes=() port https head links
-    if [ -n "${had_netwatch}" ]; then
-        if [ -n "${aliases_carried}" ] || { [ -n "${carried}" ] && [ "${carried}" != "-" ]; }; then
-            notes+=("Replaced NetWatch (settings and aliases kept).")
-        else
-            notes+=("Replaced NetWatch.")
-        fi
-        if [ -n "${unknown}" ] && [ "${unknown}" != "-" ]; then
-            notes+=("Not carried over from NetWatch: ${unknown//,/ }.")
-        fi
-    fi
     [ -n "${restored}" ] && notes+=("Restored your history (${restored}).")
     [ -n "${added}" ] && notes+=("New settings in batowatch.conf: ${added}.")
     [ -n "${has_flows}" ] || notes+=("This release has no packet counter; the Network tab uses the kernel's connection tracking.")
