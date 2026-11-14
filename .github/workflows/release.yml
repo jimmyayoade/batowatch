@@ -38,6 +38,7 @@ jobs:
         run: |
           python3 tests/test_fake_trees.py
           python3 tests/test_settings_auth.py
+          python3 tests/test_known.py
       - name: Release notes from CHANGELOG.md
         run: |
           v="${GITHUB_REF_NAME#v}"

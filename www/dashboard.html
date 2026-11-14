@@ -220,6 +220,16 @@
   .rate { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
   .live { display: inline-block; font-size: 12px; font-weight: 700; color: var(--mint-ink); background: var(--mint);
           border-radius: 3px; padding: 1px 6px; margin-left: 8px; vertical-align: 2px; }
+  .unk { display: inline-block; font-size: 12px; font-weight: 700; color: #fff; background: var(--bad);
+         border-radius: 3px; padding: 1px 6px; margin-left: 8px; vertical-align: 2px; }
+  .knownbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 12px 0 10px; font-size: 14px; }
+  .knownbar .what { color: var(--muted); }
+  .knownbar button.primary, .knownbar button.secondary, .known button.primary, .known button.secondary { padding: 6px 12px; }
+  .known { width: 100%; font-size: 14px; }
+  .known td { padding: 6px 8px; border-bottom: 1px solid var(--rule); vertical-align: middle; }
+  .known input[type=text] { width: 100%; box-sizing: border-box; }
+  .known .key { font-family: var(--mono, monospace); font-size: 13px; color: var(--muted); }
+  .log a.goto { color: inherit; text-decoration: underline; cursor: pointer; }
   tr.detail > td { padding: 0 12px 14px calc(12px + 1em + 4px); background: var(--panel); border-left: 4px solid var(--route); }
   .flows { width: 100%; font-size: 13px; background: transparent; }
   .flows th { font-size: 12px; padding: 6px 8px; background: transparent; }
@@ -378,6 +388,25 @@
       <button class="secondary" id="restart" type="button" hidden>Restart to apply</button>
       <span id="save-msg" class="muted" aria-live="polite"></span>
     </div>
+    <section aria-labelledby="known-h" id="known-sec" style="margin-top:28px">
+      <h2 id="known-h">Known devices</h2>
+      <p class="help">Devices listed here never set off the unknown-device alert, and show under these names.
+        They're the lines of <code>aliases.conf</code>; editing that file works too. Your own Tailscale machines
+        are always known, listed here or not. A home-network device is saved by its MAC address, so it stays
+        known when your router gives it a new IP.</p>
+      <p class="notice" id="known-note" hidden></p>
+      <div class="scroll"><table class="known">
+        <thead><tr><th>Name</th><th>MAC or IP</th><th>Now</th><th></th></tr></thead>
+        <tbody id="known-list"><tr><td colspan="4" class="empty-row">Loading…</td></tr></tbody>
+        <tfoot><tr>
+          <td><input type="text" id="known-add-name" placeholder="Name" aria-label="Name of the device to add"></td>
+          <td><input type="text" id="known-add-key" placeholder="MAC or IP" aria-label="MAC or IP of the device to add"></td>
+          <td></td>
+          <td><button class="secondary" type="button" id="known-add">Add</button></td>
+        </tr></tfoot>
+      </table></div>
+      <p id="known-msg" class="muted" aria-live="polite"></p>
+    </section>
   </section>
 </div>
 
@@ -904,6 +933,7 @@ function flowTable(d) {
 }
 function renderDevices(devs) {
   const q = $("q").value.trim().toLowerCase(), showInet = $("inet").checked;
+  const focusIp = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.nameFor : null;
   const rows = devs.filter(d => showInet || d.route !== "internet")
     .filter(d => !q || [d.name, d.ip, d.mac, d.os, ...d.flows.map(f => f.port + " " + f.service + " " + f.proc)].some(x => String(x ?? "").toLowerCase().includes(q)))
     .sort((a, b) => (!!b.streaming_since - !!a.streaming_since) || (ORDER.indexOf(a.route) - ORDER.indexOf(b.route)) || (a.first_seen - b.first_seen));
@@ -917,14 +947,42 @@ function renderDevices(devs) {
     const [label, v] = route(d.route), open = expanded.has(d.ip), pre = d.exact ? "" : "at least ";
     return `<tr class="dev${d.idle ? " idle" : ""}" style="--route:var(${v})">
       <td class="who"><button aria-expanded="${open}" data-ip="${esc(d.ip)}">
-        <div class="nm">${esc(d.name === d.ip ? d.ip : d.name)}${d.streaming_since ? '<span class="live">Streaming</span>' : ""}</div>
+        <div class="nm">${esc(d.name === d.ip ? d.ip : d.name)}${d.streaming_since ? '<span class="live">Streaming</span>' : ""}${isUnknown(d) ? '<span class="unk">Unknown</span>' : ""}</div>
         <div class="meta">${esc(d.name === d.ip ? [d.os, d.mac].filter(Boolean).join(", ") || "No name found" : describe(d))}</div></button></td>
       <td class="col-route-text"><span class="route"><i></i>${esc(label)}</span></td>
       <td><span data-since="${d.first_seen}" data-pre="${pre}"></span><span class="since">since ${clock(d.first_seen)}${d.exact ? "" : " or earlier"}</span></td>
       <td class="num"><div class="rate">${sparkSvg(d.ip, 72, 20, css(v))}<span>${bits(d.rate_in + d.rate_out)}</span></div></td>
       <td class="num col-total">${bytes(d.bytes_in)}</td><td class="num col-total">${bytes(d.bytes_out)}</td></tr>` +
-      (open ? `<tr class="detail" style="--route:var(${v})"><td colspan="6">${flowTable(d)}</td></tr>` : "");
+      (open ? `<tr class="detail" style="--route:var(${v})"><td colspan="6">${knownBar(d)}${flowTable(d)}</td></tr>` : "");
   }).join("");
+  if (focusIp) {   // a re-render mustn't take the name box away while someone types in it
+    const el = document.querySelector(`input[data-name-for="${CSS.escape(focusIp)}"]`);
+    if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+  }
+}
+// Known devices ------------------------------------------------------------------
+let knownEditable = true;
+const drafts = {};   // ip -> name typed into a device's "Mark as known" box
+const isUnknown = d => d.inbound && !d.known;
+function knownBar(d) {
+  const off = knownEditable ? "" : " disabled";
+  const why = knownEditable ? "" : ` <span class="what">(the dashboard login is off, so use aliases.conf)</span>`;
+  if (d.known === "tailscale") return `<div class="knownbar"><span>Known: one of your Tailscale machines.</span></div>`;
+  if (d.known === "alias") return `<div class="knownbar"><span>Known: in aliases.conf as <b>${esc(d.name)}</b>.</span>
+      <button class="secondary" type="button" data-forget="${esc(d.ip)}"${off}>Forget</button>${why}</div>`;
+  const intro = d.known === "history" ? "Known because BatoWatch has seen it before (KNOWN_DEVICES=seen)."
+    : d.inbound ? "Not a known device." : "Not a known device (this box connected to it).";
+  const value = drafts[d.ip] ?? (d.name === d.ip ? "" : d.name);
+  return `<div class="knownbar"><span>${intro}</span>
+      <input type="text" data-name-for="${esc(d.ip)}" value="${esc(value)}" placeholder="Name it" aria-label="Name for ${esc(d.ip)}"${off}>
+      <button class="primary" type="button" data-known="${esc(d.ip)}"${off}>Mark as known</button>
+      <span class="what">Saved in aliases.conf as ${esc(d.alias_key)}.</span>${why}</div>`;
+}
+async function knownPost(path, body) {
+  let r, j = {};
+  try { r = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+        j = await r.json(); } catch (e) {}
+  return r && r.ok ? null : ((j && j.error) || "Couldn't save.");
 }
 function kind(text) { return {">": "k-start", "*": "k-start", "!": "k-warn", "-": "k-gone", "<": "k-gone"}[text[0]] || ""; }
 function hms(s) { const p = s.split(":").map(Number); return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : NaN; }
@@ -949,13 +1007,50 @@ function renderNetwork() {
   $("history").innerHTML = s.history.length ? s.history.map(h => `<li><time>${clock(h.t)}</time><span><b>${esc(h.name)}</b>
       <span class="dir">${esc(route(h.route)[0])}, connected ${dur(h.duration)}, received ${bytes(h.bytes_in)}, sent ${bytes(h.bytes_out)}</span></span></li>`).join("")
     : `<li><span></span><span class="k-gone">Nothing has disconnected yet.</span></li>`;
-  $("events").innerHTML = s.events.map(e => `<li><time>${clock(e.t)}</time><span class="${kind(e.text)}">${esc(tidy(e.text))}</span></li>`).join("");
+  $("events").innerHTML = s.events.map(e => {
+    const m = e.text.match(/^! Unknown device (?:.+ \(([^)]+)\)|(\S+)) (?:connected to|tried) /), ip = m && (m[1] || m[2]);
+    const body = esc(tidy(e.text));
+    return `<li><time>${clock(e.t)}</time><span class="${kind(e.text)}">${ip ? `<a class="goto" data-goto="${esc(ip)}">${body}</a>` : body}</span></li>`;
+  }).join("");
   $("foot").textContent = `Sunshine base port ${s.sunshine_base}. Tailscale's own tunnel traffic is hidden.`;
 }
-$("devices").addEventListener("click", ev => {
+$("devices").addEventListener("input", ev => { const ip = ev.target.dataset.nameFor; if (ip) drafts[ip] = ev.target.value; });
+$("devices").addEventListener("keydown", ev => {
+  const ip = ev.target.dataset.nameFor;
+  if (ip && ev.key === "Enter") document.querySelector(`button[data-known="${CSS.escape(ip)}"]`)?.click();
+});
+$("devices").addEventListener("click", async ev => {
+  const mk = ev.target.closest("button[data-known]"), fg = ev.target.closest("button[data-forget]");
+  if (mk || fg) {
+    const ip = (mk || fg).dataset.known || (mk || fg).dataset.forget;
+    const d = state.net.devices.find(x => x.ip === ip);
+    const name = mk ? (drafts[ip] ?? (d && d.name !== d.ip ? d.name : "")).trim() : "";
+    if (mk && !name) { document.querySelector(`input[data-name-for="${CSS.escape(ip)}"]`)?.focus(); return; }
+    (mk || fg).disabled = true;
+    const err = await knownPost(mk ? "api/known" : "api/forget", mk ? {ip, name} : {ip});
+    if (err) { alert(err); (mk || fg).disabled = false; return; }
+    delete drafts[ip];
+    try { const r = await fetch("api/state"); if (r.ok) ingest(await r.json()); } catch (e) {}
+    return;
+  }
   const btn = ev.target.closest("button[data-ip]"); if (!btn) return;
   const ip = btn.dataset.ip; expanded.has(ip) ? expanded.delete(ip) : expanded.add(ip);
   renderNetwork(); document.querySelector(`button[data-ip="${CSS.escape(ip)}"]`)?.focus();
+});
+$("events").addEventListener("click", ev => {
+  const a = ev.target.closest("a[data-goto]"); if (!a) return;
+  ev.preventDefault();
+  const ip = a.dataset.goto;
+  if (state.net.devices.some(d => d.ip === ip)) {
+    expanded.add(ip); $("q").value = ""; renderNetwork();
+    const b = document.querySelector(`button[data-ip="${CSS.escape(ip)}"]`);
+    if (b) { b.scrollIntoView({block: "center"}); b.focus(); }
+  } else {   // gone: add it from the settings page instead
+    showTab("settings", true);
+    $("known-add-key").value = ip; $("known-add-name").focus();
+    $("known-sec").scrollIntoView();
+    $("known-msg").textContent = `${ip} has disconnected. Name it here to mark it as known.`;
+  }
 });
 $("q").addEventListener("input", () => state && renderNetwork());
 $("inet").addEventListener("change", () => state && renderNetwork());
@@ -966,7 +1061,44 @@ async function fetchSettings() {
   try { const r = await fetch("api/settings"); if (r.ok) settings = await r.json(); } catch (e) {}
   return settings;
 }
+async function loadKnown() {
+  let j;
+  try { const r = await fetch("api/known"); if (r.ok) j = await r.json(); } catch (e) {}
+  if (!j) return;
+  knownEditable = j.editable;
+  const off = j.editable ? "" : " disabled";
+  $("known-note").hidden = j.editable;
+  $("known-note").textContent = "The dashboard login is off, so known devices can only be changed in aliases.conf.";
+  for (const id of ["known-add", "known-add-key", "known-add-name"]) $(id).disabled = !j.editable;
+  $("known-list").innerHTML = j.devices.length ? j.devices.map(k => `<tr>
+      <td><input type="text" data-rename="${esc(k.key)}" value="${esc(k.name)}" aria-label="Name for ${esc(k.key)}"${off}></td>
+      <td class="key">${esc(k.key)}</td>
+      <td>${k.connected ? `Connected (${esc(k.connected)})` : '<span class="muted">Not connected</span>'}</td>
+      <td style="white-space:nowrap"><button class="secondary" type="button" data-save="${esc(k.key)}"${off}>Rename</button>
+        <button class="secondary" type="button" data-remove="${esc(k.key)}"${off}>Remove</button></td></tr>`).join("")
+    : `<tr><td colspan="4" class="empty-row">No known devices yet. Your Tailscale machines are known anyway.</td></tr>`;
+}
+$("known-sec").addEventListener("click", async ev => {
+  const sv = ev.target.closest("button[data-save]"), rm = ev.target.closest("button[data-remove]");
+  const add = ev.target.closest("#known-add");
+  let err;
+  if (sv) err = await knownPost("api/known", {key: sv.dataset.save,
+      name: document.querySelector(`input[data-rename="${CSS.escape(sv.dataset.save)}"]`).value});
+  else if (rm) {
+    if (!confirm(`Forget ${rm.dataset.remove}? It will count as unknown again.`)) return;
+    err = await knownPost("api/forget", {key: rm.dataset.remove});
+  } else if (add) {
+    const key = $("known-add-key").value.trim(), name = $("known-add-name").value.trim();
+    if (!key || !name) { $("known-msg").textContent = "Give both a name and a MAC or IP."; return; }
+    err = await knownPost("api/known", {key, name});
+    if (!err) { $("known-add-key").value = ""; $("known-add-name").value = ""; }
+  } else return;
+  $("known-msg").textContent = err || "Saved in aliases.conf.";
+  loadKnown();
+});
+
 async function loadSettings() {
+  loadKnown();
   await fetchSettings(); if (!settings) return;
   dirty = {}; $("save").disabled = true; $("save-msg").textContent = "";
   const note = [];
@@ -1096,7 +1228,7 @@ function connect() {
 window.addEventListener("resize", () => { if (tab === "hardware") loadCharts(); });
 setInterval(tickTimers, 1000);
 (async () => {
-  await fetchSettings();
+  await Promise.all([fetchSettings(), loadKnown()]);
   const ids = tabsWanted().map(x => x[0]);
   showTab(ids.includes(location.hash.slice(1)) ? location.hash.slice(1) : ids[0], false);
   try { const r = await fetch("api/state"); if (r.ok) ingest(await r.json()); } catch (e) {}

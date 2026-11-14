@@ -220,6 +220,26 @@ class History:
     def _set_meta(self, k, v):
         self.db.execute("INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)", (k, str(v)))
 
+    def get_flag(self, k):
+        """A one-time marker (e.g. a migration that has run), saved with the next flush."""
+        with self.lock:
+            return self._meta(k, 0) == 1
+
+    def set_flag(self, k):
+        with self.lock:
+            self._set_meta(k, 1)
+
+    def device_names(self):
+        """{ip: latest name} of every device in the history."""
+        with self.lock:
+            rows = self.db.execute("SELECT key, text FROM events WHERE kind='device' "
+                                   "ORDER BY t0").fetchall()
+        names = {}
+        for k, t in rows:
+            if k and (t and t != k or k not in names):
+                names[k] = t or k     # the latest real name beats a bare IP
+        return names
+
     def _recent_between(self, start, end):
         return [r for r in self.recent if start <= r[0] < end]
 

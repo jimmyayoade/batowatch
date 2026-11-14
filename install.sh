@@ -19,7 +19,7 @@ PORT_SCRIPT="${PORTS_DIR}/BatoWatch.sh"
 PORT_IMAGE="${PORTS_DIR}/images/batowatch-logo.png"
 GAME_LIST="${PORTS_DIR}/gamelist.xml"
 
-APP_FILES="batowatch.py settings.py webauth.py tls.py history.py hardware.py alerts.py overlay.py"
+APP_FILES="batowatch.py settings.py webauth.py tls.py history.py hardware.py alerts.py overlay.py known.py"
 FLOWS_HELPER="bw-flows"     # per-connection packet counter, a release download
 
 # The release's bw-flows for this machine, checked against the release's

@@ -54,8 +54,8 @@ SETTINGS = [
       live=False),
     # -- banners ------------------------------------------------------------
     S("NOTIFY", "choice", "overlay", "How banners are shown: overlay (drawn over games), "
-      "es (EmulationStation popup) or print (log only)", "Banners",
-      choices=("overlay", "es", "print")),
+      "es (EmulationStation popup), both, or print (log only)", "Banners",
+      choices=("overlay", "es", "both", "print")),
     S("OVERLAY_DURATION", "float", 5.0, "Seconds a connect banner stays on screen", "Banners",
       minimum=1, maximum=60),
     S("CONNECT_REPEAT", "int", 10, "Seconds after a stream ends before the same device "
@@ -101,6 +101,13 @@ SETTINGS = [
       "first; 0 turns it off", "Alerts", minimum=0, maximum=100),
     S("ALERT_RAM", "float", 5.0, "Alert when less than this percent of RAM is available; 0 "
       "turns it off", "Alerts", minimum=0, maximum=100),
+    S("ALERT_UNKNOWN", "bool", True, "Alert when a device that isn't known connects to "
+      "this box", "Alerts"),
+    S("ALERT_ATTEMPTS", "bool", False, "Also alert when an unknown device tries a port "
+      "nothing is listening on (scans; phones and TVs do it too)", "Alerts"),
+    S("KNOWN_DEVICES", "choice", "named", "Known devices: named = the ones in aliases.conf "
+      "and your Tailscale machines; seen = also every device in the history", "Alerts",
+      choices=("named", "seen")),
     # -- network details ------------------------------------------------------
     S("INTERVAL", "float", 2.0, "Seconds between connection scans", "Network", live=False,
       minimum=0.5, maximum=60),

@@ -21,6 +21,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
@@ -126,6 +127,23 @@ class Api:
         with urllib.request.urlopen(req, timeout=timeout, context=self.ctx) as r:
             return json.loads(r.read())
 
+    def post(self, path, body, timeout=5):
+        """None when it worked, else the error to show."""
+        req = urllib.request.Request(self.base + path, data=json.dumps(body).encode(), method="POST",
+                                     headers={"X-BatoWatch-Token": self.token,
+                                              "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout, context=self.ctx) as r:
+                r.read()
+            return None
+        except urllib.error.HTTPError as e:
+            try:
+                return json.loads(e.read()).get("error") or str(e)
+            except ValueError:
+                return str(e)
+        except (OSError, ValueError) as e:
+            return str(getattr(e, "reason", e))
+
     def _loop(self):
         hist_at = 0
         while True:
@@ -153,6 +171,25 @@ class Api:
 
     def refresh(self):
         self.wake.set()
+
+
+def unknown(d):
+    """A device that connected in and isn't known (see known.py)."""
+    return bool(d.get("inbound")) and not d.get("known")
+
+
+def known_status(d):
+    """(line for the device page, its colour, what X does or None)."""
+    k = d.get("known")
+    if k == "tailscale":
+        return "Known: one of your Tailscale machines", MINT, None
+    if k == "alias":
+        return "Known: in aliases.conf", MINT, "Forget"
+    if k == "history":
+        return "Known: seen before (KNOWN_DEVICES=seen)", MINT, "Mark as known"
+    if d.get("inbound"):
+        return "Unknown device", BAD, "Mark as known"
+    return "Not known (this box connected to it)", MUTED, "Mark as known"
 
 
 # ------------------------------------------------------------- controller ---
@@ -1191,6 +1228,14 @@ class App:
             text = text[:-1]
         return text + "…"
 
+    def net_devices(self):
+        """The devices the Network tab lists: everything but internet hosts,
+        except an unknown one that connected in, which is the one to see."""
+        net = (self.api.state or {}).get("net") or {}
+        devs = [d for d in net.get("devices", []) if d["route"] != "internet" or unknown(d)]
+        devs.sort(key=lambda d: (not d.get("streaming_since"), not unknown(d), d["first_seen"]))
+        return devs
+
     def draw_network(self):
         net = (self.api.state or {}).get("net")
         if not net:
@@ -1198,8 +1243,7 @@ class App:
                       (self.W // 2, self.H // 2), "center")
             self.hint([("LB", "Hardware"), ("START", "Settings")])
             return
-        devs = [d for d in net["devices"] if d["route"] != "internet"]
-        devs.sort(key=lambda d: (not d.get("streaming_since"), d["first_seen"]))
+        devs = self.net_devices()
         y = self.s(222)
         live = [d for d in devs if d.get("streaming_since")]
         for d in live[:2]:
@@ -1232,8 +1276,10 @@ class App:
                 pygame.draw.rect(self.screen, MINT, (rect.x, rect.y, self.s(6), rect.h),
                                  border_top_left_radius=8, border_bottom_left_radius=8)
             name = d["name"] + ("   ● streaming" if d.get("streaming_since") else "")
-            self.text(name, self.f_bold if sel else self.f, INK, (rect.x + self.s(22), rect.centery),
-                      "midleft")
+            r = self.text(name, self.f_bold if sel else self.f, INK, (rect.x + self.s(22), rect.centery),
+                          "midleft")
+            if unknown(d):
+                self.text("UNKNOWN", self.f_bold, BAD, (r.right + self.s(16), rect.centery), "midleft")
             route = {"tailnet-direct": "Tailscale, direct", "tailnet-relay": "Tailscale, relayed",
                      "lan": "Home network", "subnet-router": "Subnet router"}.get(d["route"], d["route"])
             right = rect.right - self.s(16)
@@ -1254,14 +1300,35 @@ class App:
         self.text(d["name"], self.f_big, INK, (self.s(30), self.s(214)))
         self.text(", ".join(x for x in (d["ip"], d.get("os"), d.get("mac")) if x), self.f, MUTED,
                   (self.s(30), self.s(270)))
-        y = self.s(320)
+        status, color, action = known_status(d)
+        self.text(status, self.f_bold, color, (self.s(30), self.s(316)))
+        y = self.s(372)
         for f in d["flows"][:12]:
             svc = f["service"] or "unlabelled"
             self.text(f"{svc} · {f['proto']} {f['port']} · {f['proc']}", self.f, INK, (self.s(30), y))
             self.text(f"in {human_bytes(f['in'])}  out {human_bytes(f['out'])}", self.f, MUTED,
                       (self.W - self.s(30), y), "topright")
             y += self.s(44)
-        self.hint([("B", "Back")])
+        self.hint([("B", "Back")] + ([("X", action)] if action else []))
+
+    def toggle_known(self, ip):
+        """X on a device page: Mark as known (keeps its current name; rename it
+        on the dashboard), or Forget."""
+        net = (self.api.state or {}).get("net") or {}
+        d = next((x for x in net.get("devices", []) if x["ip"] == ip), None)
+        if not d:
+            return
+        _status, _color, action = known_status(d)
+        if action == "Mark as known":
+            err = self.api.post("/api/known", {"ip": ip, "name": d["name"]})
+            done = f"{d['name']} is now known"
+        elif action == "Forget":
+            err = self.api.post("/api/forget", {"ip": ip})
+            done = f"Forgot {d['name']}"
+        else:
+            return
+        self.flash = (err or done, time.time())
+        self.api.refresh()
 
     MENU = ["Size", "Configure buttons", "Controller style", "Exit BatoWatch"]
 
@@ -1406,6 +1473,8 @@ class App:
         elif act == "back":
             self.api.refresh()
             self.flash = ("Refreshed", time.time())
+        elif act == "x" and self.detail and self.detail[0] == "dev":
+            self.toggle_known(self.detail[1])
         elif act in ("x", "y"):
             i = RANGES.index(self.api.range) + (-1 if act == "x" else 1)
             self.api.range = RANGES[max(0, min(len(RANGES) - 1, i))]
@@ -1424,9 +1493,7 @@ class App:
                     self.detail = ("hw", secs[min(self.sel, len(secs) - 1)][0], self.sel)
                     self.sel = 0
             else:
-                net = (self.api.state or {}).get("net") or {}
-                devs = sorted([d for d in net.get("devices", []) if d["route"] != "internet"],
-                              key=lambda d: (not d.get("streaming_since"), d["first_seen"]))
+                devs = self.net_devices()
                 if devs:
                     self.detail = ("dev", devs[min(self.sel, len(devs) - 1)]["ip"], self.sel)
 

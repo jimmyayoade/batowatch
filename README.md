@@ -73,6 +73,7 @@ The hints at the bottom of the screen show controller buttons, or keyboard keys 
 BatoWatch shows a short banner over whatever is on screen, even in a game:
 
 - **SUNSHINE**: someone connected with Moonlight. *"test-pc has connected"*
+- **UNKNOWN DEVICE**: a device BatoWatch doesn't know connected to the box. *"192.168.1.50 on SSH"* (see below)
 - **NOTICE**: something needs attention. It only appears for real problems:
 
 | Message | When |
@@ -86,6 +87,24 @@ BatoWatch shows a short banner over whatever is on screen, even in a game:
 A problem has to last 30 seconds before it shows (disk space and health: right away), and the same message repeats at most every 30 minutes. Every alert is also listed on the dashboard.
 
 The gauges help you see it coming: **mint** is normal, **amber** means getting close to a limit, **red** means the limit is reached. A busy CPU stays mint: games are supposed to use it.
+
+### Unknown devices
+
+BatoWatch tells you when a device it doesn't know connects to the box: a red **UNKNOWN DEVICE** banner, a red line in the dashboard's Activity list (tap it to go to the device), and a line in the log.
+
+- **Known devices** are the ones in `aliases.conf`, plus your own Tailscale machines, which are always known. Connections the box makes itself (to the internet, for example) never count.
+- **Mark as known**: on the dashboard, open the device in the Network tab, give it a name and press *Mark as known*. On the TV, open the device and press **X**: it keeps its current name, which you can change on the dashboard. Either way it's saved in `aliases.conf`, by MAC address for a device on your home network, so a new IP from your router doesn't make it unknown again.
+- **Forget** takes a device out of `aliases.conf` again. The dashboard's Settings tab lists every known device, to rename, remove or add one before it ever connects.
+- **The first time** alerts are on, BatoWatch adds the home-network devices already in its history to `aliases.conf` under their current names, so you don't get an alert for each of your own devices. It says how many in the log. Rename or remove any of them.
+- After a restart it waits 20 seconds before alerting, because a device that was already connected can take a few seconds to show up.
+- The same device alerts at most once an hour.
+
+| Setting | Default | What it does |
+|---------|---------|--------------|
+| `ALERT_UNKNOWN` | `on` | Turns the alert on or off |
+| `ALERT_ATTEMPTS` | `off` | `on` also alerts when an unknown device tries a port nothing is listening on (port scans; phones and smart TVs do this too) |
+| `KNOWN_DEVICES` | `named` | `named`: only `aliases.conf` and your Tailscale machines. `seen`: also every device in BatoWatch's history |
+| `NOTIFY` | `overlay` | Where banners show: `overlay` (over games), `es` (EmulationStation pop-up), `both`, or `print` (log only) |
 
 ## ⚙️ Settings
 
@@ -108,7 +127,7 @@ Both are the same settings; most apply within seconds. Some you may want:
 | `ALERT_CPU_TEMP`, `ALERT_RAM`, … | | Alert limits; `0` turns one off |
 | `WEB_BIND` | `0.0.0.0` | Set your Tailscale address (100.x.y.z) to keep the dashboard off your home network |
 
-Device names: give your devices friendly names in `aliases.conf` in the same folder (instructions inside).
+Device names: give your devices friendly names in `aliases.conf` in the same folder (instructions inside). It's also the list of known devices (see *Unknown devices* above).
 
 ## 🕓 History
 
@@ -166,15 +185,16 @@ BatoWatch is plain Python 3 (standard library only) plus one HTML page; the TV a
 | `batowatch.py` | The service: network tracking, hardware sampling, alerts, banners, the web server |
 | `hardware.py`, `history.py`, `alerts.py` | Hardware sources, the history database, alert rules |
 | `settings.py`, `webauth.py`, `tls.py` | Settings file, login, HTTPS certificates |
+| `known.py` | Known devices: reads and edits `aliases.conf` |
 | `www/dashboard.html` | The web dashboard |
 | `tv/batowatch_tv.py` | The TV app (pygame) |
 | `batowatch-service.sh` | The Batocera service script |
 | `install.sh`, `uninstall.sh` | The installer (downloads a release) and the uninstaller |
 | `flows/` | `bw-flows`, the packet counter (C, built static for x86_64 and aarch64 by CI and attached to each release), and `build.sh` to build it locally with Docker |
 | `art/` | Logo sources and the scripts that make the icons and the loading animation |
-| `tests/` | Tests that run anywhere (fake `/sys` trees, settings, login) |
+| `tests/` | Tests that run anywhere (fake `/sys` trees, settings, login, known devices) |
 
-Run the tests: `python3 tests/test_fake_trees.py && python3 tests/test_settings_auth.py`. They also run on every push.
+Run the tests: `python3 tests/test_fake_trees.py && python3 tests/test_settings_auth.py && python3 tests/test_known.py`. They also run on every push.
 
 ### Making a release
 

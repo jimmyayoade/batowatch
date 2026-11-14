@@ -41,6 +41,7 @@ sys.path.insert(0, APP_DIR)
 
 import alerts as alerts_mod            # noqa: E402  (after the path is set)
 import hardware                       # noqa: E402
+import known as known_mod             # noqa: E402
 import settings as settings_mod       # noqa: E402
 import tls                            # noqa: E402
 import webauth                        # noqa: E402
@@ -548,6 +549,7 @@ class Env:
         self.ts_peers = {}           # tailnet ip -> peer info
         self.ts_endpoints = set()    # (ip, port) of peer WireGuard endpoints
         self.ts_derp = set()         # IPs of Tailscale's relay (DERP) servers
+        self.seen = set()            # IPs of devices in the history (KNOWN_DEVICES=seen)
         self.ts_derp_at = 0.0
         self.router_ips = set(args.subnet_router)
         self.gateways = set()        # default-route next hops (IPv4 and IPv6)
@@ -625,15 +627,35 @@ class Env:
             return
         if mt == self.aliases_mtime:
             return
-        self.aliases_mtime, al = mt, {}
-        with open(path, errors="replace") as fh:
-            for line in fh:
-                line = line.split("#", 1)[0].strip()
-                if "=" in line:
-                    k, v = (x.strip() for x in line.split("=", 1))
-                    if k and v:
-                        al[k.lower()] = v
-        self.aliases = al
+        self.aliases_mtime = mt
+        self.aliases = dict(known_mod.read(path))
+
+    def reread_aliases(self):
+        """After BatoWatch itself edited aliases.conf: apply it now, not in 30 s."""
+        self.aliases_mtime = None
+        self._read_aliases()
+
+    # -- known devices -------------------------------------------------------
+    def known_by(self, ip, mode="named"):
+        """Why a device is known: 'alias' (in aliases.conf), 'tailscale' (your
+        tailnet, or a subnet router of it), 'history' (KNOWN_DEVICES=seen), or
+        None for an unknown device."""
+        mac = self.arp.get(ip)
+        if ip.lower() in self.aliases or (mac and mac in self.aliases):
+            return "alias"
+        if ip in self.ts_peers or ip in self.router_ips:
+            return "tailscale"
+        if mode == "seen" and ip in self.seen:
+            return "history"
+        return None
+
+    def alias_key(self, ip):
+        """What "Mark as known" saves: a home-network device's MAC (it keeps
+        it when the router hands out a new IP), else the IP."""
+        mac = self.arp.get(ip)
+        if mac and self.classify(ip) in ("lan", "private", "link-local"):
+            return mac
+        return ip
 
     def _read_tailscale(self):
         try:
@@ -801,6 +823,8 @@ class Device:
         self.flows = {}
         self.empty_since = None
         self.closed_in = self.closed_out = 0
+        self.inbound = False      # it has made a connection to this box
+        self.unknown_alert = None # when it set off the unknown-device alert
         self.stream_since = None
         self.stream_pkts = 0
         self.stream_change = 0.0
@@ -820,9 +844,13 @@ class Tracker:
     STREAM_IDLE = 15       # s of no stream packets before a Sunshine session ends
     STREAM_MIN = 20        # s after start before we're allowed to call it ended
     NOTIFY_COOLDOWN = 10   # s; a reconnect inside this window doesn't re-notify (CONNECT_REPEAT)
+    UNKNOWN_REPEAT = 3600  # s before the same unknown device alerts again
 
-    def __init__(self, env, args, notifier):
+    def __init__(self, env, args, notifier, cfg=None):
         self.env, self.args, self.notify = env, args, notifier
+        self.cfg = cfg if cfg is not None else {}
+        self.quiet_until = 0.0    # no unknown-device alerts before this (see main)
+        self.unknown_at = {}      # ip -> time of its last unknown-device alert
         self.lock = threading.Lock()
         self.devices = {}
         self.flow_dev = {}
@@ -920,6 +948,9 @@ class Tracker:
         dev.flows[f.key] = f
         dev.empty_since = None
         self.flow_dev[f.key] = dev
+        if f.direction == "in":
+            dev.inbound = True
+            self._check_unknown(dev, f, now)
         sun = self.env.sun
         if f.direction == "in" and dev.stream_since is None and (
                 (f.proto == 6 and f.lport == sun.rtsp)
@@ -983,6 +1014,44 @@ class Tracker:
             except Exception as e:      # history trouble must not stop the tracker
                 LOG.warning(f"network history: {e}")
 
+    # -- unknown devices ---------------------------------------------------
+    def _check_unknown(self, dev, f, now):
+        """Alert when a device that isn't known connects in (ALERT_UNKNOWN).
+        Without ALERT_ATTEMPTS, only a connection that reached a service
+        counts: a port something listens on, or one a process owns."""
+        c = self.cfg
+        if (dev.unknown_alert or not c.get("ALERT_UNKNOWN")
+                or self.bootstrapping or now < self.quiet_until):
+            return
+        mode = c.get("KNOWN_DEVICES", "named")
+        if self.env.known_by(dev.ip, mode):
+            return
+        if self.env.classify(dev.ip) == "tailnet":
+            # a tailnet address BatoWatch has no peer for yet: a machine added
+            # since the last refresh (every 30 s), so ask tailscaled again
+            self.env._read_tailscale()
+            if self.env.known_by(dev.ip, mode):
+                return
+        served = f.proc is not None or (f.proto, f.lport) in server_ports()
+        if not served and not c.get("ALERT_ATTEMPTS"):
+            return
+        dev.unknown_alert = now
+        if now - self.unknown_at.get(dev.ip, -1e9) < self.UNKNOWN_REPEAT:
+            return
+        self.unknown_at[dev.ip] = now
+        name = self.env.name_for(dev.ip)[0]
+        who = name if name == dev.ip else f"{name} ({dev.ip})"
+        svc = self.env.port_label(f.lport) or f.proc or ""
+        what = f"{PROTO_NAMES.get(f.proto, f.proto)} port {f.lport}" + (f" ({svc})" if svc else "")
+        verb = "connected to" if served else "tried"
+        self.log(f"! Unknown device {who} {verb} {what}")
+        # the banner stays short so it fits at the screen's edge; the log,
+        # the dashboard and the TV app have the details
+        place = svc.upper() if svc and len(svc) <= 4 else (svc or f"port {f.lport}")
+        self.notify(f"{name} on {place}" if served else f"{name} tried port {f.lport}",
+                    kind="unknown")
+        self._hook("unknown", "start", dev.ip)
+
     # -- sunshine sessions -------------------------------------------------
     def _stream_flows(self, dev):
         return [f for f in dev.flows.values()
@@ -1034,6 +1103,10 @@ class Tracker:
                 if path != "internet":
                     self.log(f"- {name} ({ip}) gone after {fmt_dur(dev.empty_since - dev.first_seen)}")
                     self._hook("device", "end", ip)
+                    if self.cfg.get("KNOWN_DEVICES") == "seen":
+                        self.env.seen.add(ip)
+                if dev.unknown_alert:
+                    self._hook("unknown", "end", ip)
                 del self.devices[ip]
 
     # -- view --------------------------------------------------------------
@@ -1086,6 +1159,9 @@ class Tracker:
                 "bytes_in": d.bytes_in(), "bytes_out": d.bytes_out(),
                 "rate_in": round(d.rate_in), "rate_out": round(d.rate_out),
                 "streaming_since": d.stream_since if d.stream_since is not None else None,
+                "known": env.known_by(d.ip, self.cfg.get("KNOWN_DEVICES", "named")),
+                "inbound": d.inbound, "unknown_alert": d.unknown_alert,
+                "alias_key": env.alias_key(d.ip),
                 "flows": self.flow_groups(d)})
         return {
             "now": now, "host": socket.gethostname(),
@@ -1332,6 +1408,8 @@ class WebServer:
                         if db is app.hw_hist else []
                     return self._json(200, {"range": rng, "series": db.series(names, rng),
                                             "games": games})
+                if path == "/api/known":
+                    return self._json(200, app.known_list())
                 if path == "/api/alerts":
                     past = app.hw_hist.events(["alert"], time.time() - 30 * 86400) \
                         if app.hw_hist else []
@@ -1359,10 +1437,16 @@ class WebServer:
                 except (ValueError, OSError):
                     return self._json(400, {"error": "bad request"})
                 if not app.auth.required:
+                    where = "aliases.conf" if path in ("/api/known", "/api/forget") \
+                        else "batowatch.conf"
                     return self._json(403, {"error": "Settings can only be changed here while "
-                                            "the dashboard login is on. Use batowatch.conf."})
+                                            f"the dashboard login is on. Use {where}."})
                 if path == "/api/settings":
                     return self._json(*app.save_settings(data))
+                if path == "/api/known":
+                    return self._json(*app.mark_known(data))
+                if path == "/api/forget":
+                    return self._json(*app.forget_known(data))
                 if path == "/api/restart":
                     self._json(200, {"ok": True})
                     app.restart_soon("asked from the dashboard")
@@ -1411,7 +1495,9 @@ def history_mod_ranges(rng):
 # -------------------------------------------------------------- notifier ---
 class Notifier:
     """overlay: X11 banner (overlay.py, own process), falling back to the ES
-    popup if it can't start. es: ES popup only. print: log line only.
+    popup if it can't start. es: ES popup only. both: banner and ES popup.
+    print: log line only. kind: connect (Sunshine), alert (hardware) or
+    unknown (an unknown device connected); the last two use the alert colours.
     Colours, position and durations are read from the settings each time, so
     a change applies to the next banner."""
 
@@ -1422,23 +1508,27 @@ class Notifier:
     def __call__(self, text, kind="connect"):
         self.log(f"* NOTIFY: {text}")
         mode = self.cfg["NOTIFY"]
-        if mode == "es":
+        if mode in ("es", "both"):
             threading.Thread(target=self._es, args=(text,), daemon=True).start()
-        elif mode == "overlay":
-            threading.Thread(target=self._overlay, args=(text, kind), daemon=True).start()
+        if mode in ("overlay", "both"):
+            # with "both" the ES popup is already on its way: no fallback to it
+            threading.Thread(target=self._overlay, args=(text, kind, mode == "overlay"),
+                             daemon=True).start()
 
-    def _overlay(self, text, kind):
+    def _overlay(self, text, kind, fallback=True):
         c = self.cfg
-        alert = kind == "alert"
+        alert = kind in ("alert", "unknown")
         duration = c["ALERT_DURATION"] if alert else c["OVERLAY_DURATION"]
+        caption = {"alert": "NOTICE", "unknown": "UNKNOWN DEVICE"}.get(kind, "SUNSHINE")
+        es = self._es if fallback else (lambda _text: None)
         if not os.path.exists(OVERLAY_SCRIPT):
             self.log("! overlay.py not found next to batowatch.py; using ES popup")
-            return self._es(text)
+            return es(text)
         env = dict(os.environ, DISPLAY=c["DISPLAY"])
         cmd = [sys.executable, OVERLAY_SCRIPT, "--duration", str(duration),
                "--style", c["OVERLAY_STYLE"], "--scale", str(c["OVERLAY_SCALE"]),
                "--position", c["OVERLAY_POSITION"],
-               "--caption", "NOTICE" if alert else "SUNSHINE",
+               "--caption", caption,
                "--accent", c["ALERT_ACCENT"] if alert else c["OVERLAY_ACCENT"],
                "--fg", c["OVERLAY_FG"], "--bg", c["OVERLAY_BG"],
                "--outline", c["OVERLAY_OUTLINE"], text]
@@ -1447,7 +1537,7 @@ class Notifier:
                                     stderr=subprocess.PIPE)
         except OSError as e:
             self.log(f"! overlay failed to start: {e}; using ES popup")
-            return self._es(text)
+            return es(text)
         try:
             _out, err = proc.communicate(timeout=duration + 10)
         except subprocess.TimeoutExpired:
@@ -1458,7 +1548,7 @@ class Notifier:
             msg = (err or b"").decode(errors="replace").strip().splitlines()
             self.log(f"! overlay exit {proc.returncode} ({msg[-1] if msg else 'no output'})"
                      "; using ES popup")
-            self._es(text)
+            es(text)
 
     def _es(self, text):
         try:
@@ -1648,9 +1738,98 @@ class App:
             self.restart_soon("a setting that needs a restart was changed")
         return 200, {"ok": True, "restart": restart, "mtime": str(self.cfg.mtime)}
 
+    # -- known devices (aliases.conf), for the dashboard and the TV app -------
+    def known_list(self):
+        env = self.env
+        live = {}
+        if self.tracker:
+            with self.tracker.lock:
+                for ip in self.tracker.devices:
+                    live[ip.lower()] = ip
+                    mac = env.arp.get(ip)
+                    if mac:
+                        live[mac] = ip
+        return {"devices": [{"key": k, "name": n, "connected": live.get(k)}
+                            for k, n in known_mod.read(self.nargs.aliases)],
+                "editable": bool(self.auth and self.auth.required)}
+
+    def mark_known(self, data):
+        """{"ip": ..., "name": ...} for a device BatoWatch sees (it picks the
+        key), or {"key": MAC or IP, "name": ...} to add or rename a line."""
+        try:
+            if not isinstance(data, dict):
+                raise ValueError("bad request")
+            ip = data.get("ip")
+            if ip:
+                ip = str(ipaddress.ip_address(str(ip)))     # ValueError for anything else
+            key = data.get("key") or (ip and self.env.alias_key(ip))
+            if not key:
+                raise ValueError("no device given")
+            key, name = known_mod.set_name(self.nargs.aliases, str(key), str(data.get("name") or ""))
+        except ValueError as e:
+            return 400, {"error": str(e)}
+        except OSError as e:
+            return 500, {"error": f"couldn't write aliases.conf: {e}"}
+        self.env.reread_aliases()
+        LOG.info(f"known devices: {key} = {name}")
+        return 200, {"ok": True, "key": key, "name": name}
+
+    def forget_known(self, data):
+        """{"key": ...} removes that line; {"ip": ...} removes the lines for
+        the device's IP and its MAC."""
+        try:
+            if not isinstance(data, dict):
+                raise ValueError("bad request")
+            if data.get("key"):
+                keys = [str(data["key"])]
+            elif data.get("ip"):
+                ip = str(data["ip"])
+                keys = [ip, self.env.arp.get(ip)]
+            else:
+                raise ValueError("no device given")
+            n = known_mod.forget(self.nargs.aliases, keys)
+        except ValueError as e:
+            return 400, {"error": str(e)}
+        except OSError as e:
+            return 500, {"error": f"couldn't write aliases.conf: {e}"}
+        self.env.reread_aliases()
+        LOG.info(f"known devices: forgot {', '.join(k for k in keys if k)}")
+        return 200, {"ok": True, "removed": n}
+
+    def seed_known(self):
+        """Once, when unknown-device alerts are on with KNOWN_DEVICES=named:
+        the home-network devices already in the history go into aliases.conf
+        under their current names, so the first alerts aren't for your own
+        devices. Rename or remove them there, or on the dashboard."""
+        c, env, hist = self.cfg, self.env, self.net_hist
+        if (not hist or not c["ALERT_UNKNOWN"] or c["KNOWN_DEVICES"] != "named"
+                or hist.get_flag("aliases_seeded")):
+            return
+        entries = []
+        for ip, name in hist.device_names().items():
+            try:
+                route = env.classify(ip)
+            except ValueError:
+                continue
+            if route not in ("lan", "private", "link-local") or env.known_by(ip):
+                continue
+            entries.append((env.alias_key(ip), name or ip))
+        try:
+            n = known_mod.add_many(self.nargs.aliases, entries,
+                                   f"Found in BatoWatch's history on {time.strftime('%Y-%m-%d')} "
+                                   "(rename or remove any of them)")
+        except OSError as e:
+            LOG.warning(f"known devices: couldn't add the history's devices to aliases.conf: {e}")
+            return
+        hist.set_flag("aliases_seeded")
+        env.reread_aliases()
+        LOG.info(f"known devices: added {n} device{'s' if n != 1 else ''} from the history "
+                 "to aliases.conf")
+
     def apply_live(self):
         if self.tracker:
             self.tracker.NOTIFY_COOLDOWN = self.cfg["CONNECT_REPEAT"]
+            self.seed_known()   # in case ALERT_UNKNOWN or KNOWN_DEVICES just changed
         if self.auth and self.auth.mode != self.cfg["LOGIN"]:
             self.auth.set_mode(self.cfg["LOGIN"])
         for h in (self.hw_hist, self.net_hist):
@@ -1810,7 +1989,7 @@ def main():
 
     dump_flows, packets = ct_dump, None
     if c["NETWORK"]:
-        app.tracker = Tracker(app.env, app.nargs, notifier)
+        app.tracker = Tracker(app.env, app.nargs, notifier, c)
         app.tracker.NOTIFY_COOLDOWN = c["CONNECT_REPEAT"]
         packets = flow_source(app.env)
         if packets:
@@ -1818,11 +1997,18 @@ def main():
             app.tracker.source = "packets"
             app.stop_hooks.append(packets.stop)
             packets.ready.wait(3)
+            # bw-flows only sees a connection once it sends something, so a
+            # device that was already connected can turn up a few seconds in,
+            # looking new; it mustn't set off an unknown-device alert
+            app.tracker.quiet_until = time.time() + 20
         else:
             prepare_kernel()
         app.net_hist = History(os.path.join(app.hist_dir, "network.db"), app.keep())
         app.net_hist.close_open_events(time.time())
         app.tracker.hook = app.net_hook({})
+        app.env.seen = set(app.net_hist.device_names())
+        if not args.once:
+            app.seed_known()
         try:
             dump = dump_flows()
         except OSError as e:

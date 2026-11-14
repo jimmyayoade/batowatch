@@ -19,6 +19,7 @@ jobs:
         run: |
           python3 tests/test_fake_trees.py
           python3 tests/test_settings_auth.py
+          python3 tests/test_known.py
   flows:
     # The bw-flows helper: static build on both architectures, then a short
     # run (it needs root for its packet socket) to check the ring buffer works.
