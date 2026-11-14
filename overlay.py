@@ -17,6 +17,12 @@ Styles:
   python3 overlay.py "test-pc has connected"
   python3 overlay.py --style solid --scale 1.5 "test-pc has connected"
 
+Without a compositor, whatever the banner uncovers keeps the banner's pixels
+until the program underneath redraws. Games redraw all the time; an idle
+EmulationStation doesn't, so a moving banner left trails and its text stayed
+after it closed. So the banner copies the screen it will pass over before it
+appears, and paints that copy back wherever it's about to uncover.
+
 Exit codes: 0 shown, 2 cannot open display, 3 cannot load libraries or font.
 """
 import argparse
@@ -74,6 +80,7 @@ CW_BACK_PIXEL, CW_OVERRIDE_REDIRECT, CW_SAVE_UNDER = 1 << 1, 1 << 9, 1 << 10
 INPUT_OUTPUT = 1
 Z_PIXMAP, ALL_PLANES = 2, 0xFFFFFFFF
 SHAPE_BOUNDING, SHAPE_INPUT, SHAPE_SET = 0, 2, 0
+INCLUDE_INFERIORS = 1
 
 
 def load_libs():
@@ -112,6 +119,13 @@ def load_libs():
     x11.XClearWindow.argtypes = [c_void_p, c_ulong]
     x11.XCreateBitmapFromData.restype = c_ulong
     x11.XCreateBitmapFromData.argtypes = [c_void_p, c_ulong, c_char_p, c_uint, c_uint]
+    x11.XCreateGC.restype = c_void_p
+    x11.XCreateGC.argtypes = [c_void_p, c_ulong, c_ulong, c_void_p]
+    x11.XFreeGC.argtypes = [c_void_p, c_void_p]
+    x11.XSetSubwindowMode.argtypes = [c_void_p, c_void_p, c_int]
+    x11.XSetGraphicsExposures.argtypes = [c_void_p, c_void_p, c_int]
+    x11.XCopyArea.argtypes = [c_void_p, c_ulong, c_ulong, c_void_p, c_int, c_int,
+                              c_uint, c_uint, c_int, c_int]
 
     xft.XftFontOpenName.restype = POINTER(XftFont)
     xft.XftFontOpenName.argtypes = [c_void_p, c_int, c_char_p]
@@ -310,12 +324,37 @@ def main():
     x11.XSetWindowBackgroundPixmap(dpy, win, banner)
     x11.XClearWindow(dpy, win)
 
+    # What's on screen along the banner's path, copied before it appears
+    # (see the top of this file). IncludeInferiors: the root window's copy
+    # takes in the windows on it, i.e. what the screen shows.
+    rx0, ry0 = max(0, min(start_x, target_x)), max(0, min(start_y, target_y))
+    rx1, ry1 = min(sw, max(start_x, target_x) + w), min(sh, max(start_y, target_y) + h)
+    under, gc = None, x11.XCreateGC(dpy, root, 0, None)
+    if gc and rx1 > rx0 and ry1 > ry0:
+        x11.XSetSubwindowMode(dpy, gc, INCLUDE_INFERIORS)
+        x11.XSetGraphicsExposures(dpy, gc, 0)
+        under = x11.XCreatePixmap(dpy, root, rx1 - rx0, ry1 - ry0, x11.XDefaultDepth(dpy, scr))
+        x11.XCopyArea(dpy, root, under, gc, rx0, ry0, rx1 - rx0, ry1 - ry0, 0, 0)
+    pos = None
+
+    def uncover():
+        """Paint the saved screen over the banner where it is now, so moving or
+        closing it leaves what was there rather than the banner."""
+        if under and pos:
+            x11.XCopyArea(dpy, under, win, gc, pos[0] - rx0, pos[1] - ry0, w, h, 0, 0)
+
     def place(x, y):
-        x11.XMoveWindow(dpy, win, x, y)
+        nonlocal pos
+        if (x, y) != pos:
+            uncover()
+            x11.XMoveWindow(dpy, win, x, y)
+            x11.XClearWindow(dpy, win)      # the banner again, at its new place
+            pos = (x, y)
         x11.XRaiseWindow(dpy, win)
         x11.XFlush(dpy)
 
     x11.XMapRaised(dpy, win)
+    pos = (start_x, start_y)
     frames = 1 if args.no_animate else 8
     for i in range(1, frames + 1):             # slide in (ease-out)
         t = 1 - (1 - i / frames) ** 3
@@ -333,8 +372,14 @@ def main():
         place(int(target_x + (start_x - target_x) * t), int(target_y + (start_y - target_y) * t))
         time.sleep(0.018)
 
+    uncover()
+    x11.XSync(dpy, 0)
     xft.XftDrawDestroy(bdraw)
     x11.XFreePixmap(dpy, banner)
+    if under:
+        x11.XFreePixmap(dpy, under)
+    if gc:
+        x11.XFreeGC(dpy, gc)
     xft.XftFontClose(dpy, font)
     xft.XftFontClose(dpy, cap_font)
     x11.XDestroyWindow(dpy, win)
