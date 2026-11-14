@@ -12,28 +12,23 @@ x86_64 (PC) Batocera. ARM devices will follow. See [CHANGELOG.md](CHANGELOG.md) 
 
 ## 🚀 Installing
 
-BatoWatch is installed through [Batocera Unofficial Add-ons](https://github.com/batocera-unofficial-addons/batocera-unofficial-addons) (BUA).
-
-In the BUA app: **System Utilities → BatoWatch → Install**.
-
-Or from a terminal on the box:
+From a terminal on the box (over SSH, or *F1 → Applications → xterm*):
 
 ```sh
-bua add batowatch
+curl -L https://raw.githubusercontent.com/jimmyayoade/batowatch/main/install.sh | bash
 ```
 
-When it's done, a box tells you where to find everything. Running the installer again updates BatoWatch and keeps your settings and history.
+When it's done, it tells you where to find everything. Running it again updates BatoWatch and keeps your settings and history.
 
 ### Choosing a version
 
-Every release is tagged (`v1.0.0`, `v1.1.0`, …) and listed on the [Releases](https://github.com/jimmyayoade/batowatch/releases) page with what changed. BUA installs the version it was last updated to. To install a different one, name it:
+Every release is tagged (`v1.0.0`, `v1.1.0`, …) and listed on the [Releases](https://github.com/jimmyayoade/batowatch/releases) page with what changed. The installer installs the newest one. To install a different one, name it:
 
 ```sh
-BATOWATCH_VERSION=1.0.0 bua add batowatch      # a specific version
-BATOWATCH_VERSION=latest bua add batowatch     # the newest release
+curl -L https://raw.githubusercontent.com/jimmyayoade/batowatch/main/install.sh | BATOWATCH_VERSION=1.1.0 bash
 ```
 
-Going back to an older version keeps your settings and history.
+Going back to an older version keeps your settings and history. Releases before 1.2.0 have no packet counter (`bw-flows`), so their Network tab needs the kernel's connection tracking, which Batocera 43 doesn't have.
 
 ## 🖥️ The dashboard (phone, tablet or computer)
 
@@ -123,20 +118,30 @@ BatoWatch keeps every reading for 24 hours, minute averages for 7 days, and hour
 
 ## 🗑️ Uninstalling
 
-In the BUA app, uninstall BatoWatch. It asks **"Keep BatoWatch's history?"**:
+From a terminal on the box:
+
+```sh
+/userdata/system/add-ons/batowatch/uninstall.sh
+```
+
+It asks **"Keep BatoWatch's history?"**:
 
 - **Yes** keeps it in `/userdata/system/batowatch_history`, and installing BatoWatch again picks it up.
 - **No** deletes it.
 
-**LB+RB** (uninstall without questions) removes everything, history included.
+With no screen to ask on (for example `ssh` without `-t`), it keeps the history. `uninstall.sh --ignore-warning` removes everything without asking, history included.
 
-From a terminal: `bua remove batowatch` (it asks the same question).
+Versions before 1.2.0 don't put `uninstall.sh` on the box. For those, download it:
+
+```sh
+curl -L https://raw.githubusercontent.com/jimmyayoade/batowatch/main/uninstall.sh | bash
+```
 
 ## 🔒 Privacy and safety
 
 - The dashboard shows every device on your network that talks to the box. **Never open its port (8686) to the internet.** Use Tailscale to see it from outside your home.
 - The login uses your Batocera password, which BatoWatch reads when it starts and keeps only in memory. Browsers prove they know it without sending it.
-- BatoWatch only watches. The one thing it changes is switching on the kernel's connection counters (needed to see who's connected and how much they send), as NetWatch did; it never changes your network or your other settings.
+- BatoWatch only watches. To see who's connected and how much they send, it runs a small packet counter (`bw-flows`) that keeps only the first 128 bytes of each packet and reads only the addresses and ports from them. Without it, BatoWatch switches on the kernel's connection counters instead, as NetWatch did. It never changes your network or your other settings.
 
 ## 💡 What BatoWatch costs
 
@@ -166,6 +171,8 @@ BatoWatch is plain Python 3 (standard library only) plus one HTML page; the TV a
 | `www/dashboard.html` | The web dashboard |
 | `tv/batowatch_tv.py` | The TV app (pygame) |
 | `batowatch-service.sh` | The Batocera service script |
+| `install.sh`, `uninstall.sh` | The installer (downloads a release) and the uninstaller |
+| `flows/` | `bw-flows`, the packet counter (C, built static for x86_64 and aarch64 by CI and attached to each release), and `build.sh` to build it locally with Docker |
 | `art/` | Logo sources and the scripts that make the icons and the loading animation |
 | `tests/` | Tests that run anywhere (fake `/sys` trees, settings, login) |
 
@@ -177,7 +184,7 @@ Run the tests: `python3 tests/test_fake_trees.py && python3 tests/test_settings_
 2. Add a section for it at the top of `CHANGELOG.md`.
 3. Commit, then tag and push: `git tag v1.1.0 && git push && git push --tags`.
 
-The release workflow checks that the tag matches `VERSION`, runs the tests and publishes the release with its changelog section. Then update the version in BUA's `batowatch/batowatch.sh` (`BATOWATCH_VERSION`) so BUA installs it.
+The release workflow checks that the tag matches `VERSION`, runs the tests, builds `bw-flows` for both architectures and publishes the release with its changelog section, the two binaries and their `SHA256SUMS`. The installer installs it from then on.
 
 ## 📄 License
 

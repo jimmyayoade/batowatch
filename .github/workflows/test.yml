@@ -14,7 +14,7 @@ jobs:
         run: |
           pip install pyflakes
           pyflakes *.py tv/*.py tests/*.py art/*.py
-          shellcheck -s bash batowatch-service.sh
+          shellcheck -s bash batowatch-service.sh install.sh uninstall.sh
       - name: Tests
         run: |
           python3 tests/test_fake_trees.py
