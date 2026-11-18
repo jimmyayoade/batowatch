@@ -45,7 +45,7 @@ The dashboard has three tabs:
 
 | Tab | What's on it |
 |-----|--------------|
-| **Hardware** | Gauges for CPU, temperature, memory, power, GPU and the hottest drive; a card for each part; graphs over 1 hour to 1 year (shaded while a game was running); past alerts |
+| **Hardware** | Gauges for CPU, temperature, memory, power, each GPU and the hottest drive (the row scrolls sideways when they don't fit); a card for each part; graphs over 1 hour to 1 year (shaded while a game was running); past alerts |
 | **Network** | Who is streaming with Moonlight right now, every connected device, and what connected or left recently |
 | **Settings** | Every setting, explained, with your current value and the default |
 
@@ -57,7 +57,7 @@ Open **Ports → BatoWatch**. The first time, it asks you to hold each button so
 
 | Controller | Keyboard | Does |
 |------------|----------|------|
-| D-pad / left stick | Arrow keys | Move |
+| D-pad / left stick | Arrow keys | Move; on the Hardware page, left / right scroll the top row when its tiles don't all fit |
 | A | Enter | Open a section |
 | B | Backspace | Back |
 | LB / RB | Shift+Tab / Tab | Switch between Hardware and Network |
