@@ -100,7 +100,13 @@
   .word.bad { color: #fff; background: var(--bad); }
 
   /* Hardware summary tiles */
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 22px; }
+  /* one row; when the tiles don't all fit at a readable width (several GPUs) it
+     scrolls sideways instead of squeezing them. A phone wraps them two a row instead */
+  .tiles { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(190px, 1fr); gap: 10px;
+           margin-bottom: 22px; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x proximity; overscroll-behavior-x: contain;
+           scrollbar-width: thin; scrollbar-color: var(--rule) transparent; padding-bottom: 4px; }
+  .tiles > .tile { scroll-snap-align: start; min-width: 0; }
+  .tiles:focus-visible { outline: 2px solid var(--mint); outline-offset: 3px; border-radius: 14px; }
   .tile { background: var(--panel); border: 1px solid transparent; position: relative;
           border-radius: 14px; padding: 12px 14px; }
   .tile.bad { border-color: var(--bad); }
@@ -120,6 +126,8 @@
   .row.stack .r { justify-content: flex-end; }
   .row .sub { color: var(--muted); font-size: 12px; }
   .tile .k { color: var(--muted); font-size: 13px; display: flex; justify-content: space-between; gap: 6px; }
+  .tile .k > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tile .s { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .tile .v { font: 700 32px/1.15 var(--num); margin-top: 4px; letter-spacing: -.01em; }
   .tile .s { color: var(--muted); font-size: 12px; }
 
@@ -280,7 +288,7 @@
     .seg button { padding: 12px 14px; }
     .field { grid-template-columns: 1fr; }
     .field label { padding-top: 0; }
-    .tiles { grid-template-columns: repeat(2, 1fr); }
+    .tiles { grid-auto-flow: row; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow-x: visible; }
   }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
@@ -314,7 +322,7 @@
       <footer><span class="muted" style="font-size:13px;align-self:center">Saved in this browser.</span>
         <button class="secondary" id="cust-reset" type="button">Reset</button></footer>
     </dialog>
-    <div class="tiles" id="tiles"></div>
+    <div class="tiles" id="tiles" tabindex="0" role="region" aria-label="Summary"></div>
     <div class="cards" id="cards"></div>
 
     <section aria-labelledby="hist-h">
