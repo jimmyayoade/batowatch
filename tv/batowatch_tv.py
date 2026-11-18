@@ -268,6 +268,7 @@ class App:
         self.api = Api()
         self.tab = 0                    # 0 hardware, 1 network
         self.sel = 0
+        self.tile_off = 0               # first top-row tile shown, when the row scrolls
         self.detail = None              # ("hw", section, sel) or ("dev", ip, sel)
         self.menu = None                # settings menu index, or None
         self.style_override = self.prefs.get("style")
@@ -576,12 +577,52 @@ class App:
         hw = (self.api.state or {}).get("hw") or {}
         return {r["name"]: r for r in hw.get("readings", [])}, hw
 
+    @staticmethod
+    def gpu_groups(R):
+        """Every GPU's readings together (same PCI device = same GPU), as the web
+        dashboard groups them, with its load, main temperature, power and memory."""
+        first = {}
+        for r in R.values():
+            i = r["info"]
+            if r["group"] == "gpu" or (r["group"] in ("temp", "power") and i.get("kind") == "gpu"):
+                k = i.get("card") or i.get("pdev") or i.get("hwmon") or r["name"].split(".")[1]
+                first.setdefault(k, []).append(r)
+        by = {}
+        for rs in first.values():
+            for r in rs:
+                i = r["info"]
+                by.setdefault(i.get("pdev") or i.get("card") or i.get("model") or "gpu", []).append(r)
+        out = []
+        for gid, rs in by.items():
+            model = next((r["info"]["model"] for r in rs if r["info"].get("model")), "Graphics card")
+            loads = sorted((r for r in rs if r["name"].endswith((".busy", ".engine_busy"))),
+                           key=lambda r: -r["value"])
+            temps = [r for r in rs if r["group"] == "temp"]
+            temp = (next((r for r in temps if r["label"].lower().endswith("edge")), None) or
+                    next((r for r in temps if r["label"].lower().endswith("junction")), None) or
+                    max(temps, key=lambda r: r["value"], default=None))
+            out.append({"id": gid, "model": model, "short": short_gpu(model), "rows": rs,
+                        "busy": loads[0] if loads else None, "temp": temp,
+                        "power": next((r for r in rs if r["unit"] == "W"), None),
+                        "vram": next((r for r in rs if r["name"].endswith(".vram_mb")), None)})
+        return out
+
+    def gpu_sections(self, R):
+        """[(section name, GPU)]: "GPU" for a box with one, each model's short name with several."""
+        gpus = [g for g in self.gpu_groups(R) if any(not r["name"].endswith(".present") for r in g["rows"])]
+        if len(gpus) == 1:
+            return [("GPU", gpus[0])]
+        return [(g["short"], g) for g in gpus]
+
+    def gpu_of(self, name):
+        R, _hw = self.readings()
+        return dict(self.gpu_sections(R)).get(name)
+
     def sections(self):
         R, hw = self.readings()
         groups = [("CPU", lambda r: r["group"] in ("cpu", "cpu-core") or r["name"] ==
                    (hw.get("summary") or {}).get("cpu_temp")),
-                  ("GPU", lambda r: r["group"] == "gpu" or (r["group"] == "temp" and
-                                                              r["info"].get("kind") == "gpu")),
+                  ("GPU", None),
                   ("Memory", lambda r: r["group"] == "mem"),
                   ("Disks", lambda r: r["group"] in ("disk", "diskio", "smart")),
                   ("Power", lambda r: r["group"] in ("power", "battery")),
@@ -591,6 +632,11 @@ class App:
                   ("BatoWatch itself", lambda r: r["group"] == "self")]
         out = []
         for name, test in groups:
+            if test is None:        # the GPUs: one section each
+                for gname, g in self.gpu_sections(R):
+                    out.append((gname, sorted((r for r in g["rows"] if not r["name"].endswith(".present")),
+                                              key=self._order)))
+                continue
             rows = [r for r in R.values() if test(r) and not r["name"].endswith(".present")]
             if rows:
                 out.append((name, sorted(rows, key=self._order)))
@@ -616,12 +662,9 @@ class App:
             if S.get("cpu_temp") in R:
                 parts.append(self.fmt(R[S["cpu_temp"]]))
             return " · ".join(parts), R.get("cpu.usage", {}).get("value"), bad
-        if name == "GPU":
-            loads = [r for r in rows if r["name"].endswith(("busy", "engine_busy"))]
-            if len(loads) > 1:
-                return f"{len(loads)} GPUs · " + " / ".join(self.fmt(r) for r in loads), None, bad
-            busy = loads[0] if loads else None
-            temp = next((r for r in rows if r["unit"] == "°C"), None)
+        g = self.gpu_of(name)
+        if g:
+            busy, temp = g["busy"], g["temp"]
             parts = [f"{self.fmt(busy)} load"] if busy else []
             if temp:
                 parts.append(self.fmt(temp))
@@ -723,15 +766,52 @@ class App:
         S = hw.get("summary") or {}
         lim = hw.get("limits") or {}
         tiles = [("CPU", R.get("cpu.usage")), ("CPU temperature", R.get(S.get("cpu_temp"))),
-                 ("Memory", R.get("mem.used_pct")), ("Power", R.get(S.get("power"))),
-                 ("Hottest disk", R.get(S.get("disk_temp")))]
+                 ("Memory", R.get("mem.used_pct")), ("Power", R.get(S.get("power")))]
+        gpus = [g for g in self.gpu_groups(R) if g["busy"] or g["temp"]]
+        tiles += [("GPU" if len(gpus) == 1 else g["short"], g["busy"] or g["temp"]) for g in gpus]
+        tiles.append(("Hottest disk", R.get(S.get("disk_temp"))))
         tiles = [t for t in tiles if t[1]]
         if not tiles:
             return y
         h = self.s(128)
-        w = (self.W - self.s(60) - self.s(14) * (len(tiles) - 1)) // len(tiles)
-        for i, (label, r) in enumerate(tiles):
-            x = self.s(30) + i * (w + self.s(14))
+        gap, avail = self.s(14), self.W - self.s(60)
+        # Each tile is as wide as its label, readout and a gauge of a useful size
+        # need, and the space left over is shared out. When the row can't fit them
+        # all (a box with several GPUs), it shows what fits and scrolls with
+        # left/right; arrows at its ends show there's more
+        def need(label, r):
+            body = self.s(36) + self.f_num.size(self.fmt(r))[0]
+            if r["unit"] in ("%", "°C"):
+                body += self.s(16) + 2 * self.s(34)
+            return max(self.s(180), self.s(36) + self.f_small.size(label)[0], body)
+        needs = [need(lb, r) for lb, r in tiles]
+
+        def span(i, j):
+            return sum(needs[i:j]) + gap * (j - i - 1)
+        # the furthest the row can scroll: the last tiles just fill it
+        last_off = next(i for i in range(len(tiles)) if span(i, len(tiles)) <= avail or i == len(tiles) - 1)
+        self.tile_off = max(0, min(self.tile_off, last_off))
+        end = self.tile_off + 1
+        while end < len(tiles) and span(self.tile_off, end + 1) <= avail:
+            end += 1
+        more_left, more_right = self.tile_off > 0, end < len(tiles)
+        tiles, needs = tiles[self.tile_off:end], needs[self.tile_off:end]
+        extra = max(0, avail - span(0, len(tiles))) // len(tiles)
+        widths = [min(avail, n + extra) for n in needs]
+        a, cy = self.s(8), y + h // 2
+        if more_left:
+            pygame.draw.polygon(self.screen, MINT, [(self.s(9), cy), (self.s(9) + a, cy - a * 1.4),
+                                                    (self.s(9) + a, cy + a * 1.4)])
+        if more_right:
+            rx = self.W - self.s(9)
+            pygame.draw.polygon(self.screen, MINT, [(rx, cy), (rx - a, cy - a * 1.4), (rx - a, cy + a * 1.4)])
+        num_font = self.f_num
+        x = self.s(30) - gap
+        for (label, r), w in zip(tiles, widths):
+            x += gap
+            # a label too long for its tile (only on a very narrow screen) ends in "…"
+            while len(label) > 4 and self.f_small.size(label)[0] > w - self.s(36):
+                label = label[:-2].rstrip() + "…"
             bad = self.is_bad(r, lim)
             self.box((x, y, w, h), PANEL, BAD if bad else None, 16)
             self.text(label, self.f_small, MUTED, (x + self.s(18), y + self.s(16)))
@@ -739,7 +819,7 @@ class App:
                 word = lim[r["name"]]["word"] if bad else "OK"
                 self.text(word.upper(), self.f_small, BAD if bad else MINT,
                           (x + self.s(18), y + h - self.s(14)), "bottomleft")
-            tr = self.text(self.fmt(r), self.f_num, INK, (x + self.s(18), y + h // 2 + self.s(6)),
+            tr = self.text(self.fmt(r), num_font, INK, (x + self.s(18), y + h // 2 + self.s(6)),
                            "midleft")
             # a gauge like the logo's, where there's something to measure against
             # how full, and how close to the alert: CPU load is never a warning
@@ -763,6 +843,7 @@ class App:
                 if rad >= self.s(16):
                     self.gauge((x + w - rad - self.s(18), y + h // 2 + self.s(8)), rad, frac, level,
                                max(3, min(self.s(7), rad // 4)))
+            x += w
         return y + h + self.s(18)
 
     @staticmethod
@@ -794,7 +875,7 @@ class App:
         if name == "CPU":
             specs = [("CPU load", ["cpu.usage"]),
                      ("CPU temperature", [S["cpu_temp"]] if S.get("cpu_temp") in R else [])]
-        elif name == "GPU":
+        elif self.gpu_of(name):
             specs = [("GPU load", pick(lambda r: r["name"].endswith(("busy", "engine_busy")), 3)),
                      ("GPU temperature", pick(lambda r: r["unit"] == "°C", 2))]
             if not specs[0][1] and not specs[1][1]:
@@ -1045,29 +1126,23 @@ class App:
             if core_rows:
                 T.append(("Each core", [("Core", 0.3, "l"), ("Load", 0.7, "l")],
                           [[r["label"], {"meter": r["value"], "text": self.fmt(r)}] for r in core_rows]))
-        elif name == "GPU":
-            gpus = {}
-            for r in R.values():
-                if r["group"] == "gpu" or (r["info"].get("kind") == "gpu"):
-                    k = r["info"].get("pdev") or r["info"].get("card") or r["info"].get("model")
-                    gpus.setdefault(k, []).append(r)
-            data = []
-            for k, rs in gpus.items():
-                model = next((r["info"]["model"] for r in rs if r["info"].get("model")), "Graphics card")
-                get = lambda test: next((r for r in rs if test(r)), None)  # noqa: E731
-                load = get(lambda r: r["name"].endswith(("busy", "engine_busy")))
-                clock = get(lambda r: r["unit"] == "MHz")
-                temp = get(lambda r: r["unit"] == "°C")
-                mem = get(lambda r: r["name"].endswith("vram_mb"))
-                memtxt = "–"
-                if mem:
-                    tot = mem["info"].get("total_mb")
-                    memtxt = f"{self.fmt(mem)} of {tot / 1024:.0f} GB" if tot else self.fmt(mem)
-                data.append([model, self.fmt(load) if load else "–", self.fmt(clock) if clock else "–",
-                             (self.fmt(temp), BAD if self.is_bad(temp, lim) else INK) if temp else "–",
-                             memtxt])
-            T.append((None, [("Graphics card", 0.36, "l"), ("Load", 0.12, "r"), ("Clock", 0.16, "r"),
-                             ("Temperature", 0.16, "r"), ("Memory", 0.2, "r")], data))
+        elif self.gpu_of(name):
+            g = self.gpu_of(name)
+            data = [["Graphics card", g["model"]]]
+            for r in rows:
+                label = r["label"]
+                for m in (g["model"], r["info"].get("model") or "",
+                          (r["info"].get("model") or "").replace("NVIDIA ", "", 1)):
+                    if m and label.startswith(m + " "):
+                        label = label[len(m) + 1:]
+                        break
+                label = label[:1].upper() + label[1:]
+                if r is g["vram"] and r["info"].get("total_mb"):
+                    value = f"{self.fmt(r)} of {r['info']['total_mb'] / 1024:.0f} GB"
+                else:
+                    value = self.fmt(r)
+                data.append([label, (value, BAD if self.is_bad(r, lim) else INK)])
+            T.append((None, facts, data))
         elif name == "Memory":
             m = R.get("mem.used_pct")
             data = []
@@ -1165,7 +1240,8 @@ class App:
         y0 = self.s(222)
         r = self.text(name, self.f_huge, INK, (self.s(30), y0))
         self.text(text, self.f_mid, BAD if bad else MINT, (r.right + self.s(24), r.centery), "midleft")
-        self.text(self.SUBTITLES.get(name, ""), self.f, MUTED, (self.s(30), r.bottom + self.s(8)))
+        sub = self.SUBTITLES.get(name) or (self.SUBTITLES["GPU"] if self.gpu_of(name) else "")
+        self.text(sub, self.f, MUTED, (self.s(30), r.bottom + self.s(8)))
         top = r.bottom + self.s(56)
         bottom = self.H - self.s(80)
         x, w = self.s(30), self.W - self.s(60)
@@ -1484,6 +1560,8 @@ class App:
                 self.detail, self.sel = None, self.detail[2]
             elif act == "a" and self.detail[0] == "hw":
                 self.sel += 1          # draw_section wraps back to the first page
+        elif act in ("left", "right") and self.tab == 0:
+            self.tile_off += -1 if act == "left" else 1     # draw_tiles keeps it in range
         elif act in ("up", "down"):
             self.sel += -1 if act == "up" else 1
         elif act == "a":
@@ -1572,6 +1650,13 @@ class App:
             pygame.display.flip()
             self.clock.tick(30)
         pygame.quit()
+
+
+def short_gpu(model):
+    """"NVIDIA GeForce RTX 2080 Ti Rev. A" -> "RTX 2080 Ti", "Intel UHD Graphics 770" -> "UHD Graphics 770"."""
+    m = re.sub(r"^(NVIDIA|AMD|ATI|Intel)\s+", "", model or "", flags=re.I)
+    m = re.sub(r"^(GeForce|Radeon)\s+", "", m, flags=re.I)
+    return re.sub(r"\s+Rev\.\s*\w+$", "", m).strip() or "GPU"
 
 
 def human_bytes(n):

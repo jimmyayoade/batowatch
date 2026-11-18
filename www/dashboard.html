@@ -532,6 +532,33 @@ function friendlyTemp(r) {
 const tempKind = r => r.info.kind === "cpu" || /processor/i.test(friendlyTemp(r)) ? "Processor" :
   r.info.kind === "gpu" ? "Graphics" : r.info.kind === "disk" ? "Drives" : "Other";
 const cleanCpu = m => (m || "").replace(/\((R|TM|tm|r)\)/g, "").replace(/\s+CPU\s*@.*$|\s+@.*$|\s+\d+-Core Processor$/, "").replace(/\s+/g, " ").trim();
+// Every GPU's readings together (same PCI device = same GPU), named by its model,
+// with its load and main temperature picked out for the tiles and graphs
+function gpuGroups(R) {
+  const first = {};
+  for (const r of Object.values(R)) if (r.group === "gpu" || (r.group === "temp" && r.info.kind === "gpu") || (r.group === "power" && r.info.chip && r.info.kind === "gpu")) {
+    const k = r.info.card || r.info.pdev || r.info.hwmon || r.name.split(".")[1];
+    (first[k] = first[k] || []).push(r);
+  }
+  const by = {};
+  for (const list of Object.values(first)) for (const r of list) {
+    const k = r.info.pdev || r.info.card || r.info.model || "gpu";
+    (by[k] = by[k] || []).push(r);
+  }
+  return Object.entries(by).map(([id, list]) => {
+    const model = (list.find(r => r.info.model) || {info: {}}).info.model || "GPU";
+    const busy = list.filter(r => /\.(busy|engine_busy)$/.test(r.name)).sort((a, b) => b.value - a.value)[0];
+    const temps = list.filter(r => r.group === "temp");
+    const temp = temps.find(r => /edge$/i.test(r.label)) || temps.find(r => /junction$/i.test(r.label)) ||
+      temps.sort((a, b) => b.value - a.value)[0];
+    const power = list.find(r => r.unit === "W");
+    const vram = list.find(r => r.name.endsWith(".vram_mb"));
+    return {id, model, short: shortGpu(model), list, busy, temp, power, vram};
+  });
+}
+// "NVIDIA GeForce RTX 2080 Ti Rev. A" -> "RTX 2080 Ti", "Intel UHD Graphics 770" -> "UHD Graphics 770"
+const shortGpu = m => (m || "GPU").replace(/^(NVIDIA|AMD|ATI|Intel)\s+/i, "").replace(/^(GeForce|Radeon)\s+/i, "")
+  .replace(/\s+Rev\.\s*\w+$/, "").trim() || "GPU";
 const ifName = i => /^(eth|en)/.test(i) ? `Wired (${i})` : /^wl/.test(i) ? `Wi-Fi (${i})` : /^tailscale/.test(i) ? "Tailscale" : i;
 // A gauge like the logo's (and the TV app's): 240 degrees, mint while normal,
 // amber close to an alert limit, red once the alert fires. CPU load never
@@ -585,14 +612,22 @@ function renderHardware() {
     return {key, label: k, html: `<div class="tile${st && st.bad ? " bad" : ""}${g ? " has-gauge" : ""}"><div class="k"><span>${k}</span>${word(st)}</div>
       <div class="mid"><div class="dial">${g}${v}</div></div><div class="s">${esc(sub || "")}</div></div>`};
   };
-  const cpuT = R[S.cpu_temp], gpuT = R[S.gpu_temp], mem = R["mem.used_pct"], pw = R[S.power], dT = R[S.disk_temp];
-  const gpuBusy = Object.values(R).find(r => /\.(busy|engine_busy)$/.test(r.name));
+  const cpuT = R[S.cpu_temp], mem = R["mem.used_pct"], pw = R[S.power], dT = R[S.disk_temp];
+  const gpuList = gpuGroups(R), gpuTiles = gpuList.filter(g => g.busy || g.temp);
+  // One GPU keeps the old "gpu" tile (and its place in a saved layout); with several,
+  // each gets its own tile, named by its model
+  const gpuTile = g => {
+    const sub = [g.busy && g.temp ? fmt(g.temp) : "", g.power ? fmt(g.power) : "",
+      g.vram && g.vram.info.total_mb ? `${(g.vram.value / 1024).toFixed(1)}/${(g.vram.info.total_mb / 1024).toFixed(0)} GB` : ""].filter(Boolean);
+    return gpuTiles.length > 1 ? tile("gpu:" + g.id, g.short, g.busy || g.temp, sub.join(" · "))
+      : tile("gpu", "GPU", g.busy || g.temp, sub.join(" · "));
+  };
   $("tiles").innerHTML = arranged("tiles", [
     tile("cpu", "CPU", R["cpu.usage"], R["cpu.freq"] ? fmt(R["cpu.freq"]) : ""),
     tile("cputemp", "CPU temperature", cpuT, cpuT ? friendlyTemp(cpuT) : "no sensor"),
     tile("mem", "Memory", mem, mem ? `${(mem.info.avail_mb / 1024).toFixed(1)} GB free of ${(mem.info.total_mb / 1024).toFixed(1)} GB` : ""),
     pw ? tile("power", "Power", pw, POWER_NAMES[pw.label] || pw.label) : null,
-    gpuBusy || gpuT ? tile("gpu", "GPU", gpuBusy || gpuT, gpuBusy && gpuT ? fmt(gpuT) : "") : null,
+    ...gpuTiles.map(gpuTile),
     dT ? tile("disk", "Hottest disk", dT, friendlyTemp(dT)) : null,
   ].filter(Boolean));
 
@@ -607,23 +642,15 @@ function renderHardware() {
     ${rows(cpuRows)}${thr && thr.value ? `<div class="row"><span class="l">Slowed down because it got too hot</span><span class="r"><span class="word bad">Hot</span>${thr.value}×</span></div>` : ""}
     <div class="cores">${cores.map(c => `<div class="core"><div class="bar"><i style="height:${c.value}%"></i></div>${esc(c.label.replace("Core ", "#"))}</div>`).join("")}</div></div>`);
   // GPU(s)
-  const gpus = {};
-  for (const r of Object.values(R)) if (r.group === "gpu" || (r.group === "temp" && r.info.kind === "gpu") || (r.group === "power" && r.info.chip && r.info.kind === "gpu")) {
-    const k = r.info.card || r.info.pdev || r.info.hwmon || r.name.split(".")[1];
-    (gpus[k] = gpus[k] || []).push(r);
-  }
-  // One group per GPU (same PCI device = same GPU), named by its model
-  const byGpu = {};
-  for (const list of Object.values(gpus)) for (const r of list) {
-    const k = r.info.pdev || r.info.card || r.info.model || "gpu";
-    (byGpu[k] = byGpu[k] || []).push(r);
-  }
-  const gpuList = Object.values(byGpu);
   if (gpuList.length) {
-    const body = gpuList.map(list => {
-      const model = (list.find(r => r.info.model) || {info: {}}).info.model || "GPU";
+    const body = gpuList.map(({model, list}) => {
       const shown = list.filter(r => !r.name.endsWith(".present"));
-      const strip = r => Object.assign({}, r, {label: r.label.replace(model + " ", "").replace(/^./, c => c.toUpperCase())});
+      // labels start with the model, as each source names it ("GeForce RTX 2080 Ti load")
+      const strip = r => {
+        let l = r.label;
+        for (const m of [model, r.info.model, (r.info.model || "").replace(/^NVIDIA /, "")]) if (m && l.startsWith(m + " ")) { l = l.slice(m.length + 1); break; }
+        return Object.assign({}, r, {label: l.replace(/^./, c => c.toUpperCase())});
+      };
       return `<h3 style="margin-top:6px">${esc(model)}</h3>` + (shown.length ? rows(shown.map(strip)) :
         `<div class="row"><span class="l">Doesn't report load or clock</span></div>`);
     }).join("");
@@ -760,13 +787,16 @@ function chartSpecs() {
   if (!state || !state.hw) return [];
   const S = state.hw.summary, R = rmap(), specs = [];
   specs.push({id: "cpu", title: "CPU load", unit: "%", lines: [["cpu.usage", "CPU", css("--blue")]], max: 100});
-  const t = [S.cpu_temp, S.gpu_temp, S.disk_temp].filter(Boolean);
-  if (t.length) specs.push({id: "temp", title: "Temperatures", unit: "°C", lines: t.map((n, i) => [n, R[n] ? friendlyTemp(R[n]) : n, LINE_COLORS[i]])});
+  const gpus = gpuGroups(R);
+  const gpuTemps = gpus.map(g => g.temp && g.temp.name).filter(Boolean);
+  const t = [...new Set([S.cpu_temp, ...(gpuTemps.length ? gpuTemps : [S.gpu_temp]), S.disk_temp].filter(Boolean))];
+  if (t.length) specs.push({id: "temp", title: "Temperatures", unit: "°C", lines: t.map((n, i) => [n, R[n] ? friendlyTemp(R[n]) : n, LINE_COLORS[i % LINE_COLORS.length]])});
   specs.push({id: "mem", title: "Memory used", unit: "%", lines: [["mem.used_pct", "Memory", css("--mint")]], max: 100});
   const pw = Object.values(R).filter(r => r.group === "power").slice(0, 3);
   if (pw.length) specs.push({id: "power", title: "Power", unit: "W", lines: pw.map((r, i) => [r.name, POWER_NAMES[r.label] || r.label, LINE_COLORS[i]])});
-  const g = Object.values(R).find(r => /\.(busy|engine_busy)$/.test(r.name));
-  if (g) specs.push({id: "gpu", title: "GPU load", unit: "%", lines: [[g.name, g.info.model || "GPU", LINE_COLORS[0]]], max: 100});
+  const loads = gpus.filter(g => g.busy);
+  if (loads.length) specs.push({id: "gpu", title: "GPU load", unit: "%", max: 100,
+    lines: loads.map((g, i) => [g.busy.name, loads.length > 1 ? g.short : g.model, LINE_COLORS[i % LINE_COLORS.length]])});
   for (const n of extra) if (R[n]) specs.push({id: "x-" + n, title: R[n].label, unit: R[n].unit, lines: [[n, R[n].label, css("--blue")]], removable: n});
   return specs;
 }

@@ -171,7 +171,7 @@ print("== fake nvidia-smi ==")
 bindir = tempfile.mkdtemp()
 fake = os.path.join(bindir, "nvidia-smi")
 with open(fake, "w") as fh:
-    fh.write("#!/bin/sh\necho '0, NVIDIA GeForce RTX 3060, 42, 63, 88.50, 2048, 12288, 35, 1800'\n")
+    fh.write("#!/bin/sh\necho '0, NVIDIA GeForce RTX 3060, 42, 63, 88.50, 2048, 12288, 35, 1800, 00000000:01:00.0'\n")
 os.chmod(fake, os.stat(fake).st_mode | stat.S_IEXEC)
 os.environ["PATH"] = bindir + os.pathsep + os.environ["PATH"]
 src = hardware.NvidiaSource("")
@@ -181,6 +181,7 @@ rr = {x.name: x for x in src.read(time.time(), None)}
 check(rr["gpu.nv0.busy"].value == 42 and rr["gpu.nv0.temp"].value == 63 and rr["gpu.nv0.power"].value == 88.5,
       "nvidia busy/temp/power")
 check(hardware.main_gpu_temp(rr).value == 63, "nvidia temp is the main GPU temp")
+check(rr["gpu.nv0.busy"].info.get("pdev") == "0000:01:00.0", "nvidia PCI address matches sysfs form")
 shutil.rmtree(bindir)
 
 print("== history: tiers age out (fake clock) ==")

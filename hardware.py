@@ -619,7 +619,7 @@ class FdinfoSource(Source):
 class NvidiaSource(Source):
     name, title = "nvidia", "NVIDIA graphics (nvidia-smi)"
     QUERY = ("index,name,utilization.gpu,temperature.gpu,power.draw,memory.used,memory.total,"
-             "fan.speed,clocks.gr")
+             "fan.speed,clocks.gr,pci.bus_id")
 
     def probe(self):
         if self.root not in ("", "/"):
@@ -645,6 +645,15 @@ class NvidiaSource(Source):
         for row in self._query():
             idx, name = row[0], row[1]
             info = {"model": name, "vendor": "0x10de"}
+            # nvidia-smi writes the address as 00000000:01:00.0, sysfs (and the DRM
+            # source) as 0000:01:00.0; the same address lets the dashboard show one card
+            bus = row[9] if len(row) > 9 else ""
+            if bus.count(":") == 2:
+                dom, rest = bus.split(":", 1)
+                try:
+                    info["pdev"] = f"{int(dom, 16):04x}:{rest.lower()}"
+                except ValueError:
+                    pass
 
             def num(i):
                 try:
