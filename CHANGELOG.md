@@ -5,6 +5,36 @@ Versions follow [semantic versioning](https://semver.org): bug fixes raise the
 last number, new features the middle one, and changes that need you to do
 something the first one.
 
+## 1.2.0 (2026-11-18)
+
+- **Packet counter (`bw-flows`):** a small helper, built for x86_64 and
+  aarch64 and attached to each release, counts each connection's traffic.
+  Batocera 43 has no kernel connection tracking, so the Network tab needs it
+  there. It uses about 0.1% of one core, against about 5% for doing the same
+  in Python.
+- **Unknown-device alert:** a device BatoWatch doesn't know that connects to
+  the box gets a red UNKNOWN DEVICE banner, a line in the Activity list and
+  the log. Known means in `aliases.conf` or one of your Tailscale machines.
+  *Mark as known* and *Forget* on the dashboard (and X in the TV app);
+  settings `ALERT_UNKNOWN`, `ALERT_ATTEMPTS`, `KNOWN_DEVICES` and
+  `NOTIFY=both`. The first time, the home-network devices already in the
+  history are added to `aliases.conf`, so your own devices don't alert.
+- **A gauge for every GPU:** a box with two GPUs showed one gauge, for
+  whichever card came first. Each GPU now has its own tile (load gauge;
+  temperature, power and memory), its own line in the GPU graphs and, in the
+  TV app, its own section and page. The NVIDIA card no longer shows twice in
+  the GPU card. The top row scrolls sideways when the tiles don't fit (left
+  and right in the TV app).
+- **Banners leave no trails:** over a screen that doesn't redraw, like an
+  idle EmulationStation, the slide-in left trails and the text stayed after
+  the banner closed. Fixed.
+- **Tailscale relays** are recognised by address, so they no longer show up
+  as unknown internet devices. The dashboard's own port is labelled
+  batowatch-web.
+- **Own installer and uninstaller** (`install.sh`, `uninstall.sh`): install
+  or update with one command; the uninstaller is put on the box. With no
+  screen to ask on, the uninstaller keeps the history.
+
 ## 1.1.0 (2026-11-08)
 
 - **TV app with a keyboard:** Esc exits (like Hotkey + Start), Backspace goes
